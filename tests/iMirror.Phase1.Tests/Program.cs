@@ -278,6 +278,8 @@ internal static class Program
             var text = File.ReadAllText(file);
             Assert(text.Contains("Janela pronta") && text.Contains("Aplicativo encerrado") &&
                 !text.Contains("[Error]"), "Logs do ciclo de vida incompletos ou com erro.");
+            Assert(File.Exists(Path.Combine(logsDirectory, "bluetooth", "bluetooth-control.log")),
+                "Log Bluetooth não respeitou o diretório isolado desta instância de teste.");
         }
         finally
         {

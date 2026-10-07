@@ -34,6 +34,16 @@ namespace iMirror.Diagnostics
         private static extern uint ProcessTrace(ulong[] handles, uint count, IntPtr start, IntPtr end);
         [DllImport("advapi32.dll")]
         private static extern uint CloseTrace(ulong handle);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PropertyDescriptor
+        {
+            public ulong PropertyName;
+            public uint ArrayIndex;
+            public uint Reserved;
+        }
+        [DllImport("tdh.dll")]
+        private static extern uint TdhGetProperty(IntPtr record, uint contextCount, IntPtr context,
+            uint propertyCount, ref PropertyDescriptor property, uint size, byte[] value);
         private static readonly Guid Provider = new Guid("8A1F9517-3A8C-4A9E-A018-4F17A200F277");
         private readonly ConcurrentQueue<string> _lines = new ConcurrentQueue<string>();
         private readonly Dictionary<ushort, string> _links = new Dictionary<ushort, string>();
@@ -42,7 +52,7 @@ namespace iMirror.Diagnostics
         private IntPtr _properties, _logger;
         private ulong _session, _consumer = ulong.MaxValue;
         private Task _task;
-        private int _disposed, _number, _events, _dropped, _unsupported, _errors;
+        private int _disposed, _number, _events, _dropped, _unsupported, _errors, _decoded, _schemaErrors;
         private readonly long[] _types = new long[8];
         public string SessionName { get { return _name; } }
         public bool StopConfirmed { get; private set; }
@@ -59,7 +69,7 @@ namespace iMirror.Diagnostics
             return result.ToArray();
         }
         public void Heartbeat()
-        { Line("HEARTBEAT controllerEvents=" + _events + "; eventPackets=" + _types[4] + "; parseErrors=" + _errors + "; consumerCompleted=" + (_task != null && _task.IsCompleted)); }
+        { Line("HEARTBEAT controllerEvents=" + _events + "; decodedStatusEvents=" + _decoded + "; schemaErrors=" + _schemaErrors + "; parseErrors=" + _errors + "; consumerCompleted=" + (_task != null && _task.IsCompleted)); }
         private static void Check(uint result, string operation)
         { if (result != 0) { throw new Win32Exception((int)result, operation + " failed, Win32=" + result); } }
         public void Start()
@@ -111,25 +121,87 @@ namespace iMirror.Diagnostics
                 if (size < 8 || data == IntPtr.Zero) { Interlocked.Increment(ref _errors); return; }
                 int type = Marshal.ReadByte(data, 3);
                 if (type < _types.Length) { Interlocked.Increment(ref _types[type]); }
-                // Never copy command, ACL, SCO, SMP, keys or input data.
-                if (type != 4) { return; }
                 uint length = unchecked((uint)Marshal.ReadInt32(data, 4));
-                if (length > size - 8 || length < 2) { Interlocked.Increment(ref _errors); return; }
+                // Independently verify packed offsets against the installed
+                // manifest. Read only scalar metadata with TDH, never BIP_Data.
+                uint namedType, namedLength;
+                if (!Scalar(record, "BIP_Type", 1, out namedType) || !Scalar(record, "BIP_DataLen", 4, out namedLength)
+                    || namedType != type || namedLength != length)
+                { Interlocked.Increment(ref _schemaErrors); return; }
+                string decoded = DecodeBip(data, size);
+                if (decoded != null)
+                {
+                    Interlocked.Increment(ref _decoded);
+                    long timestamp = Marshal.ReadInt64(record, 16);
+                    Line("controller=" + DateTimeOffset.FromFileTime(timestamp).ToString("o") + " " + decoded);
+                }
+            }
+            catch { Interlocked.Increment(ref _errors); }
+        }
+        private static bool Scalar(IntPtr record, string name, uint size, out uint value)
+        {
+            IntPtr propertyName = Marshal.StringToHGlobalUni(name);
+            try
+            {
+                var descriptor = new PropertyDescriptor { PropertyName = unchecked((ulong)propertyName.ToInt64()), ArrayIndex = uint.MaxValue };
+                byte[] bytes = new byte[size];
+                value = 0;
+                if (TdhGetProperty(record, 0, IntPtr.Zero, 1, ref descriptor, size, bytes) != 0) { return false; }
+                value = size == 1 ? bytes[0] : BitConverter.ToUInt32(bytes, 0);
+                return true;
+            }
+            finally { Marshal.FreeHGlobal(propertyName); }
+        }
+        // Also exercised by fixtures with the entire Event 402 BIP envelope.
+        // BIP kinds are not H4 packet types. On this Windows provider, kind 2
+        // carries HCI events (verified with TDH metadata and native advertising
+        // CommandComplete responses); do not interpret kind 4/data as events.
+        public string DecodeBip(IntPtr data, int size)
+        {
+                if (data == IntPtr.Zero || size < 8) { return null; }
+                int type = Marshal.ReadByte(data, 3);
+                uint length = unchecked((uint)Marshal.ReadInt32(data, 4));
+                if (type != 2 || length != size - 8 || length < 2) { return null; }
                 IntPtr packet = IntPtr.Add(data, 8);
                 int code = Marshal.ReadByte(packet), payload = Marshal.ReadByte(packet, 1);
-                if (payload + 2 != length) { Interlocked.Increment(ref _errors); return; }
+                if (payload + 2 != length) { return null; }
+                if (code == 0x0E && payload >= 4)
+                {
+                    int opcode = (ushort)Marshal.ReadInt16(packet, 3);
+                    // Only commands whose first return parameter is Status.
+                    // Never format arbitrary read responses or secret bytes.
+                    if (!StatusCommand(opcode)) { return null; }
+                    return "BIP kind=" + type + " CommandComplete opcode=0x" + opcode.ToString("X4") + " status=0x" + Marshal.ReadByte(packet, 5).ToString("X2");
+                }
+                if (code == 0x0F && payload == 4)
+                {
+                    int opcode = (ushort)Marshal.ReadInt16(packet, 4);
+                    if (!StatusCommand(opcode)) { return null; }
+                    return "BIP kind=" + type + " CommandStatus opcode=0x" + opcode.ToString("X4") + " status=0x" + Marshal.ReadByte(packet, 2).ToString("X2");
+                }
                 int need = Needed(code, packet, payload);
-                if (need == 0 || payload < need) { return; }
+                if (need == 0 || payload < need) { return null; }
                 // Copy only the allowlisted event prefix. Peer address fields are
                 // present in some controller events but never read or formatted.
                 byte[] safeEvent = new byte[need + 2];
-                Marshal.Copy(packet, safeEvent, 0, safeEvent.Length);
-                long timestamp = Marshal.ReadInt64(record, 16);
-                string decoded = Decode(safeEvent);
-                if (decoded != null) { Line("controller=" + DateTimeOffset.FromFileTime(timestamp).ToString("o") + " " + decoded); }
-                Array.Clear(safeEvent, 0, safeEvent.Length);
+                try
+                {
+                    Marshal.Copy(packet, safeEvent, 0, safeEvent.Length);
+                    string decoded = Decode(safeEvent);
+                    return decoded == null ? null : "BIP kind=" + type + " " + decoded;
+                }
+                finally { Array.Clear(safeEvent, 0, safeEvent.Length); }
+        }
+        private static bool StatusCommand(int opcode)
+        {
+            switch (opcode)
+            {
+                case 0x0406: // Disconnect
+                case 0x2006: case 0x2008: case 0x2009: case 0x200A: // LE advertising parameters/data/scan response/enable
+                case 0x2036: case 0x2037: case 0x2038: case 0x2039: // extended LE advertising equivalents
+                    return true;
+                default: return false;
             }
-            catch { Interlocked.Increment(ref _errors); }
         }
         private static int Needed(int code, IntPtr packet, int payload)
         {
@@ -191,7 +263,7 @@ namespace iMirror.Diagnostics
             }
             if (_consumer != ulong.MaxValue) { CloseTrace(_consumer); }
             if (_task != null && !_task.Wait(5000)) { Line("Consumer shutdown pending; native callback retained until process exit"); return; }
-            Line("SUMMARY controllerEvents=" + _events + "; command=" + _types[1] + "; ACL=" + _types[2] + "; SCO=" + _types[3] + "; event=" + _types[4] + "; unsupportedVersion=" + _unsupported + "; parseErrors=" + _errors + "; outputDropped=" + _dropped);
+            Line("SUMMARY controllerEvents=" + _events + "; BIPkind1=" + _types[1] + "; BIPkind2=" + _types[2] + "; BIPkind3=" + _types[3] + "; BIPkind4=" + _types[4] + "; decodedStatusEvents=" + _decoded + "; unsupportedVersion=" + _unsupported + "; schemaErrors=" + _schemaErrors + "; parseErrors=" + _errors + "; outputDropped=" + _dropped);
             if (_logger != IntPtr.Zero) { Marshal.FreeHGlobal(_logger); }
             if (_properties != IntPtr.Zero) { Marshal.FreeHGlobal(_properties); }
             GC.KeepAlive(_callback);

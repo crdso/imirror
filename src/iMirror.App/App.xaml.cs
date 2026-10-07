@@ -25,7 +25,8 @@ public partial class App : Application
         };
         try
         {
-            var directory = Environment.GetEnvironmentVariable("IMIRROR_LOG_DIRECTORY")
+            var explicitLogDirectory = Environment.GetEnvironmentVariable("IMIRROR_LOG_DIRECTORY");
+            var directory = explicitLogDirectory
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "iMirror", "logs");
             _log = new FileDiagnosticLog(directory);
@@ -36,7 +37,10 @@ public partial class App : Application
             var config = AirPlayConfiguration.FindConfig();
             var projectDirectory = config is not null ? new DirectoryInfo(Path.GetDirectoryName(config)!) : null;
             while (projectDirectory is not null && !File.Exists(Path.Combine(projectDirectory.FullName, "iMirror.sln"))) { projectDirectory = projectDirectory.Parent; }
-            var controlDirectory = projectDirectory is not null ? Path.Combine(projectDirectory.FullName, "logs") : directory;
+            // Test/diagnostic instances must honor their isolated log directory
+            // for Bluetooth too; otherwise startup collides with the live app.
+            var controlDirectory = explicitLogDirectory is not null ? Path.Combine(directory, "bluetooth")
+                : projectDirectory is not null ? Path.Combine(projectDirectory.FullName, "logs") : directory;
             _bluetoothLog = new BluetoothControlLog(Path.Combine(controlDirectory, "bluetooth-control.log"));
             _bluetoothLog.Written += (category, message) =>
             {

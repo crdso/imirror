@@ -1,6 +1,8 @@
 using iMirror.Bluetooth;
 internal static class HogpLifecycleProbe
 {
+    // Exercise the exact lease behavior without sharing the live HID publisher's lease.
+    private static readonly string LeaseName = "Local\\iMirror.Tests.Hogp." + Guid.NewGuid().ToString("N");
     private static void Require(bool value) { if (!value) { throw new InvalidOperationException("HOGP lifetime/evidence invariant failed."); } }
     private sealed class Peripheral : IHogpPeripheral
     {
@@ -21,14 +23,14 @@ internal static class HogpLifecycleProbe
     public static async Task UnconfirmedStop()
     {
         using var log = Log(); var instances = new List<Peripheral>();
-        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral { CanRecreateAfterStop = false }; instances.Add(p); return p; });
+        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral { CanRecreateAfterStop = false }; instances.Add(p); return p; }, LeaseName);
         await controller.ConnectAsync();
         await controller.RestartAsync();
         Require(controller.Status.State == BluetoothState.Error && controller.Status.Message.Contains("Feche e reabra", StringComparison.Ordinal));
         await controller.ConnectAsync(); await controller.RestartAsync();
         Require(instances.Count == 1 && instances[0].Starts == 1 && instances[0].Disposes == 1 && controller.Status.ProviderGeneration == 1);
         // The native lease remains held until process shutdown, preventing another local provider.
-        using var semaphore = new Semaphore(1, 1, "Local\\iMirror.BleHidProbe.Instance");
+        using var semaphore = new Semaphore(1, 1, LeaseName);
         Require(!semaphore.WaitOne(0));
         await controller.DisconnectAsync();
         Require(semaphore.WaitOne(0)); semaphore.Release();
@@ -36,7 +38,7 @@ internal static class HogpLifecycleProbe
     public static async Task Connect()
     {
         using var log = Log(); var instances = new List<Peripheral>();
-        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral(); instances.Add(p); return p; });
+        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral(); instances.Add(p); return p; }, LeaseName);
         await Task.WhenAll(Enumerable.Range(0, 15).Select(_ => controller.ConnectAsync()));
         Require(instances.Count == 1 && instances[0].Starts == 1 && controller.Status.ProviderGeneration == 1);
         var timedOut = PairingStatus.Create(true, true, [], null, false, false, 1, false, TimeSpan.FromSeconds(31));
@@ -46,7 +48,7 @@ internal static class HogpLifecycleProbe
     public static async Task Reconnect()
     {
         using var log = Log(); var p = new Peripheral();
-        await using var controller = new BluetoothController(log, _ => p);
+        await using var controller = new BluetoothController(log, _ => p, LeaseName);
         await controller.ConnectAsync();
         var host = new BluetoothHost("test", "H1", "test", true, "GATT Active", true, true, true, true, false, true);
         p.Publish(PairingStatus.Create(true, true, [host], "test", true, true, 1, true, TimeSpan.Zero));
@@ -59,7 +61,7 @@ internal static class HogpLifecycleProbe
     public static async Task Reset()
     {
         using var log = Log(); var instances = new List<Peripheral>();
-        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral(); instances.Add(p); return p; });
+        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral(); instances.Add(p); return p; }, LeaseName);
         await controller.ConnectAsync(); await controller.RestartAsync();
         Require(instances.Count == 2 && instances[0].Disposes == 1 && instances[1].Starts == 1 && controller.Status.ProviderGeneration == 2);
         await controller.ConnectAsync(); Require(instances.Count == 2);

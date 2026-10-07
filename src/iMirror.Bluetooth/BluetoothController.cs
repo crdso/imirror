@@ -1,6 +1,7 @@
 namespace iMirror.Bluetooth;
 
-public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothControlLog, IHogpPeripheral>? factory = null) : IBluetoothController, IAsyncDisposable
+public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothControlLog, IHogpPeripheral>? factory = null,
+    string? instanceLeaseName = null) : IBluetoothController, IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private IHogpPeripheral? _peripheral;
@@ -37,7 +38,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
             }
             if (_peripheral is not null) { _peripheral.BeginPairing(); Set(_peripheral.GetStatus()); log.Write("pairing", $"generation={_generation}; reuse provider; visual pairing window renewed"); return; }
             Set(new(BluetoothState.Starting, "Iniciando controle Bluetooth...", []));
-            _instance = new Semaphore(1, 1, "Local\\iMirror.BleHidProbe.Instance");
+            _instance = new Semaphore(1, 1, instanceLeaseName ?? "Local\\iMirror.BleHidProbe.Instance");
             if (!_instance.WaitOne(0)) { _instance.Dispose(); _instance = null; throw new InputBlockedException("Feche o probe BLE antes de conectar pelo iMirror."); }
             _peripheral = factory?.Invoke(log) ?? new HogpPeripheral(log);
             _generation++;
@@ -97,7 +98,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
             Set(BluetoothStatus.Stopped);
             await Task.Delay(500, token);
             // Keep the lifecycle gate across the reset: a concurrent Connect cannot create a second provider.
-            _instance = new Semaphore(1, 1, "Local\\iMirror.BleHidProbe.Instance");
+            _instance = new Semaphore(1, 1, instanceLeaseName ?? "Local\\iMirror.BleHidProbe.Instance");
             if (!_instance.WaitOne(0)) { _instance.Dispose(); _instance = null; throw new InputBlockedException("Feche o outro receiver/probe HID."); }
             _peripheral = factory?.Invoke(log) ?? new HogpPeripheral(log);
             _generation++;

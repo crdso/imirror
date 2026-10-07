@@ -20,7 +20,39 @@ if ($SelfTest) {
         @{ Data = [byte[]](0x05,4,0); Expected = $null }
     )
     foreach ($test in $tests) { $actual = $trace.Decode($test.Data); if ($actual -ne $test.Expected) { throw ('Unexpected sanitized decode: ' + $actual) } }
-    'PASS: 12 controller fixtures; Classic/LE/enhanced LE, disconnect, encryption, authentication; keys/unsupported/truncated rejected; no native trace started.'
+    $envelopes = @(
+        @{ Kind=2; Packet=[byte[]](0x05,4,0,1,0,0x13); Expected='BIP kind=2 DisconnectionComplete L1 status=0x00 reason=0x13 (Remote User Terminated Connection)' },
+        @{ Kind=4; Packet=[byte[]](0x05,4,0,1,0,0x13); Expected=$null }, # H4 event constant is NOT this provider's BIP event kind
+        @{ Kind=2; Packet=[byte[]](0x0E,4,1,0x0A,0x20,0); Expected='BIP kind=2 CommandComplete opcode=0x200A status=0x00' },
+        @{ Kind=2; Packet=[byte[]](0x0F,4,0x0C,1,6,4); Expected='BIP kind=2 CommandStatus opcode=0x0406 status=0x0C' },
+        @{ Kind=1; Packet=[byte[]](0x05,4,0,1,0,0x13); Expected=$null }, # command kind must never be interpreted as event
+        @{ Kind=3; Packet=[byte[]](0x05,4,0,1,0,0x13); Expected=$null }, # event-shaped data payload rejected
+        @{ Kind=7; Packet=[byte[]](0x05,4,0,1,0,0x13); Expected=$null },
+        @{ Kind=2; Packet=[byte[]](0x18,8,1,2,3,4,5,6,7,8); Expected=$null }, # key material is never formatted
+        @{ Kind=2; Packet=[byte[]](0x0E,4,1,0xFF,0xFF,0xAA); Expected=$null }, # unknown return bytes are not treated as status
+        @{ Kind=2; Packet=[byte[]](0x05,4,0); Expected=$null },
+        @{ Kind=2; Packet=[byte[]](0x05,4,0,1,0,0x13); DeclaredLength=7; Expected=$null },
+        @{ Kind=2; Packet=[byte[]](0x05,4,0,1,0,0x13); Size=7; Expected=$null }
+    )
+    foreach ($test in $envelopes) {
+        $bytes = [byte[]]::new(8 + $test.Packet.Length)
+        $bytes[0] = 1; $bytes[1] = 2; $bytes[3] = $test.Kind
+        $length = if ($test.ContainsKey('DeclaredLength')) { $test.DeclaredLength } else { $test.Packet.Length }
+        [BitConverter]::GetBytes([uint32]$length).CopyTo($bytes,4)
+        $test.Packet.CopyTo($bytes,8)
+        $memory = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+        try {
+            [Runtime.InteropServices.Marshal]::Copy($bytes,0,$memory,$bytes.Length)
+            $size = if ($test.ContainsKey('Size')) { $test.Size } else { $bytes.Length }
+            $actual = (New-Object iMirror.Diagnostics.BluetoothLinkTrace).DecodeBip($memory,$size)
+            if ($actual -ne $test.Expected) { throw ('Unexpected sanitized BIP decode: ' + $actual) }
+        } finally {
+            [Array]::Clear($bytes,0,$bytes.Length)
+            [Runtime.InteropServices.Marshal]::Copy($bytes,0,$memory,$bytes.Length)
+            [Runtime.InteropServices.Marshal]::FreeHGlobal($memory)
+        }
+    }
+    'PASS: 24 controller fixtures; 12 HCI and 12 complete BIP envelopes; keys/data/unknown/truncated rejected; no native trace started.'
     exit 0
 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -42,17 +74,24 @@ if ($StopSession) {
 $trace = New-Object iMirror.Diagnostics.BluetoothLinkTrace
 $lease = [Threading.Mutex]::new($false, 'Local\iMirror.Bluetooth.LinkTrace')
 $ownsLease = $false
-function Write-TraceLines { foreach ($line in $trace.Drain()) { $line | Add-Content -LiteralPath $path -Encoding UTF8; Write-Host $line } }
+$logWriter = $null
+function Write-TraceLines { foreach ($line in $trace.Drain()) { $logWriter.WriteLine($line); Write-Host $line } }
 try {
     try { $ownsLease = $lease.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsLease = $true }
     if (-not $ownsLease) { throw 'Uma coleta já está ativa. Aguarde seu término; não será aberta outra sessão.' }
+    # Keep one shared append handle for the entire capture. Repeated Add-Content
+    # opens could fail with ERROR_SHARING_VIOLATION when diagnostics were read.
+    # Readers/tailers are allowed without interrupting the native consumer.
+    $logStream = [IO.FileStream]::new($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+    $logWriter = [IO.StreamWriter]::new($logStream,[Text.UTF8Encoding]::new($false))
+    $logWriter.AutoFlush = $true
     # Recover ONLY the exact prior diagnostic-owned logger if its consumer was
     # terminated. The mutex prevents stopping a live cooperative collector.
     if (Test-Path -LiteralPath $statePath) {
         $previous = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         if ($previous.Session -notmatch '^iMirror\.Bluetooth\.Status\.[0-9a-f]{32}$') { throw 'Estado de coleta inválido; nenhuma sessão foi parada.' }
         & "$env:SystemRoot\System32\logman.exe" stop $previous.Session -ets *> $null
-        ('{0} RECOVERY STOP session={1}; logmanExit={2}' -f (Get-Date).ToString('o'), $previous.Session, $LASTEXITCODE) | Add-Content -LiteralPath $path -Encoding UTF8
+        $logWriter.WriteLine(('{0} RECOVERY STOP session={1}; logmanExit={2}' -f (Get-Date).ToString('o'), $previous.Session, $LASTEXITCODE))
     }
     $trace.Start()
     @{ Session = $trace.SessionName; Started = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
@@ -68,7 +107,7 @@ try {
         Write-TraceLines
     }
 } catch {
-    ('{0} TRACE ERROR type={1}; HRESULT=0x{2:X8}' -f (Get-Date).ToString('o'), $_.Exception.GetType().Name, $_.Exception.HResult) | Add-Content -LiteralPath $path -Encoding UTF8
+    if ($logWriter) { $logWriter.WriteLine(('{0} TRACE ERROR type={1}; HRESULT=0x{2:X8}' -f (Get-Date).ToString('o'), $_.Exception.GetType().Name, $_.Exception.HResult)) }
     throw
 } finally {
     $trace.Dispose(); Write-TraceLines
@@ -76,5 +115,6 @@ try {
         $saved = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         if ($saved.Session -eq $trace.SessionName) { Remove-Item -LiteralPath $statePath }
     }
+    if ($logWriter) { $logWriter.Dispose() }
     if ($ownsLease) { $lease.ReleaseMutex() }; $lease.Dispose()
 }

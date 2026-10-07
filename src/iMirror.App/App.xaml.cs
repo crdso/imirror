@@ -53,7 +53,7 @@ public partial class App : Application
             {
                 Dispatcher.BeginInvoke(new Action(() => _viewModel.AirPlayCommand.Execute(null)));
             }
-            _log.Write(LogLevel.Information, "App", "Janela pronta. AirPlay externo e BLE HID independentes; PHASE 3: IMPLEMENTED — PENDING PHYSICAL VALIDATION.");
+            _log.Write(LogLevel.Information, "App", "Janela pronta. PHASE 3 BLE TRANSPORT: PHYSICALLY VALIDATED; PHASE 3 INPUT: PHYSICALLY VALIDATED; PHASE 3 UX: UPDATED — PENDING USER VALIDATION.");
         }
         catch (Exception ex)
         {

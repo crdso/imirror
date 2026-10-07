@@ -25,6 +25,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly BluetoothControlLog? _controlLog;
     private bool _captureKeyboard = true;
     private int _wheelIntensity = 1;
+    private double _cursorSpeed = 1;
+    private KeyboardLayoutMode _keyboardLayoutMode;
     private BluetoothHost? _selectedHost;
     private int _appearanceIndex;
     private bool _bluetoothStarted;
@@ -79,7 +81,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             else
             {
                 if (!CanControl || _capture is null) { throw new InputBlockedException("É necessário streaming AirPlay e subscriber de mouse no host selecionado."); }
-                await _capture.StartAsync(_ownedPid, () => (_receiver.Status.Width ?? 0, _receiver.Status.Height ?? 0), CaptureKeyboard && Bluetooth.KeyboardConnected, WheelIntensity);
+                await _capture.StartAsync(_ownedPid, () => (_receiver.Status.Width ?? 0, _receiver.Status.Height ?? 0), CaptureKeyboard && Bluetooth.KeyboardConnected, WheelIntensity, CursorSpeed, KeyboardLayoutMode);
                 RefreshControl();
             }
         }, BluetoothError, dispatcher);
@@ -107,6 +109,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     { get => _captureKeyboard; set { if (_captureKeyboard == value) { return; } _captureKeyboard = value; _capture?.RequestStop("opção de teclado alterada"); OnPropertyChanged(); } }
     public int WheelIntensity
     { get => _wheelIntensity; set { _wheelIntensity = Math.Clamp(value, 1, 5); _capture?.RequestStop("intensidade alterada"); OnPropertyChanged(); } }
+    public double CursorSpeed
+    { get => _cursorSpeed; set { _cursorSpeed = double.IsFinite(value) ? Math.Clamp(value,0.25,3) : 1; _capture?.RequestStop("velocidade alterada; reative o controle"); OnPropertyChanged(); } }
+    public IReadOnlyList<KeyboardLayoutMode> KeyboardLayouts { get; } = Enum.GetValues<KeyboardLayoutMode>();
+    public KeyboardLayoutMode KeyboardLayoutMode
+    { get => _keyboardLayoutMode; set { _keyboardLayoutMode = value; _capture?.RequestStop("layout alterado; reative o controle"); OnPropertyChanged(); } }
     public int AppearanceIndex
     { get => _appearanceIndex; set { if (_appearanceIndex == value) { return; } _appearanceIndex = value; OnPropertyChanged(); _ = ChangeAppearanceAsync(); } }
     private async Task ChangeAppearanceAsync()
@@ -151,7 +158,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (_disposed) { return; }
             AirPlay = status;
             Notice = status.State == AirPlayState.Error ? status.Message :
-                "O vídeo abre na janela externa do GStreamer. O milestone com iPhone ainda precisa de validação manual.";
+                "AirPlay e controle BLE validados no iPhone. Ajustes de cursor e teclado aguardam seu teste.";
             foreach (var name in new[] { nameof(AirPlay), nameof(ConnectionStatus), nameof(AirPlayButtonText), nameof(VideoMetrics), nameof(TimingMetrics) })
             { OnPropertyChanged(name); }
             RefreshControl();

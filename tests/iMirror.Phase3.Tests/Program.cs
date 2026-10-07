@@ -14,7 +14,18 @@ internal static class Program
         try
         {
             if (args.Contains("--native")) { return await NativeTest(); }
-            await Test("Report Map byte exact upstream 7d66ef1", () => Check(() => Require(HidSchema.ReportMap.SequenceEqual(BleHid.Core.HidDescriptors.ReportMapValue))));
+            if (args.Contains("--native-cursor"))
+            { using var cursorLog=new BluetoothControlLog(Path.Combine("logs","phase3b-native-cursor.log"),echo:true); await NativeCaptureTest(cursorLog); return 0; }
+            await Test("Report Map upstream unchanged except required ABNT2 usage range", () => Check(() =>
+            {
+                var expected = BleHid.Core.HidDescriptors.ReportMapValue.ToList();
+                int logical = expected.FindIndex(index => index == 0x65);
+                Require(expected[logical-1] == 0x25); expected[logical-1] = 0x26; expected[logical] = 0x87; expected.Insert(logical+1,0);
+                int usage = expected.FindIndex(index => index == 0x65);
+                Require(expected[usage-1] == 0x29); expected[usage] = 0x87;
+                Require(HidSchema.ReportMap.SequenceEqual(expected));
+                Require(HidSchema.KeyboardState(0,[0x87])[2] == 0x87);
+            }));
             await Test("Keyboard reserved byte and six usages without report ID", () => Check(() => Require(HidSchema.KeyboardState(2, [4,5]).SequenceEqual(new byte[] {2,0,4,5,0,0,0,0}))));
             await Test("Keyboard rollover and deduplication", () => Check(() => { Require(HidSchema.KeyboardState(0, [4,4]).Count(value => value == 4) == 1); Require(HidSchema.KeyboardState(0, [4,5,6,7,8,9,10]).Skip(2).All(value => value == 1)); }));
             await Test("Mouse 16-bit relative axes and signed wheel", () => Check(() => { var data = HidSchema.Mouse(-30000,30000,-5,2); Require(data.Length == 6 && data[0] == 2 && BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(1)) == -30000 && BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(3)) == 30000 && (sbyte)data[5] == -5); }));
@@ -37,25 +48,119 @@ internal static class Program
             await Test("Focus loss never sends and neutralizes", async () => { var fake = new Fake(); var buffer = new InputReportBuffer(); buffer.Enqueue(InputReport.Mouse(1)); using var log = Log(); await InputSender.RunAsync(buffer,fake,()=>false,_=>{},log,CancellationToken.None); Require(fake.Sent==0 && fake.Release==1); });
             await Test("Cancellation cannot suppress release", async () => { var fake = new Fake(); using var token = new CancellationTokenSource(); token.Cancel(); using var log = Log(); await InputSender.RunAsync(new(),fake,()=>true,_=>{},log,token.Token); Require(fake.Release==1 && fake.Sent==0); });
             await Test("Inactive capture idempotent stop and no-subscriber start rejects", async () => { var fake = new Fake { Live=false }; using var log = Log(); var capture = new InputCapture(fake,log); await capture.StopAsync(); await capture.StopAsync(); try { await capture.StartAsync(()=>0,()=>(998,2160),true,1); throw new Exception("Expected block"); } catch(InputBlockedException) { Require(!capture.IsActive); } });
-            Console.WriteLine($"PHASE 3 TESTS: {_passed}/{_passed}; physical validation pending"); return 0;
+            await Test("Linear sensitivity fractional remainder clamp and reset", () => Check(() =>
+            {
+                var motion = new RelativeMotion(); Require(motion.Add(4,-4,0.25)==(1,-1));
+                Require(motion.Add(0.5,-0.5,1)==(0,0) && motion.Add(0.5,-0.5,1)==(1,-1));
+                Require(motion.Add(2,-2,3)==(6,-6)); Require(motion.Add(100000,-100000,3)==(32767,-32767));
+                Require(motion.Add(0,0,1)==(0,0)); motion.Add(0.5,0.5,1); motion.Reset(); Require(motion.Add(0.5,0.5,1)==(0,0));
+            }));
+            await Test("Auto HKL Brazil US unsupported fallback and explicit override", () => Check(() =>
+            {
+                Require(KeyboardLayout.Resolve(KeyboardLayoutMode.Auto,(nint)0x04160416)==KeyboardLayoutMode.PortugueseBrazilAbnt2);
+                Require(KeyboardLayout.Resolve(KeyboardLayoutMode.Auto,(nint)0x04090409)==KeyboardLayoutMode.UnitedStates);
+                Require(KeyboardLayout.Resolve(KeyboardLayoutMode.Auto,0)==KeyboardLayoutMode.UnitedStates);
+                Require(KeyboardLayout.Resolve(KeyboardLayoutMode.UnitedStates,(nint)0x04160416)==KeyboardLayoutMode.UnitedStates);
+            }));
+            await Test("ABNT2 OEM scans and international keys independent of virtual-key name", () => Check(() =>
+            {
+                foreach(var mode in new[] {KeyboardLayoutMode.UnitedStates,KeyboardLayoutMode.PortugueseBrazilAbnt2})
+                {
+                    Require(KeyboardLayout.Usage(0xC0,0x29,false,mode)==0x35);
+                    Require(KeyboardLayout.Usage(0xDE,0x1A,false,mode)==0x2F);
+                    Require(KeyboardLayout.Usage(0xBA,0x27,false,mode)==0x33);
+                    Require(KeyboardLayout.Usage(0xC1,0x73,false,mode)==0x87);
+                    Require(KeyboardLayout.Usage(0xE2,0x56,false,mode)==0x64);
+                }
+                var state = new KeyboardState(); state.Update(0xDE,true,0x2F); state.Update(0xDE,false,0x34); Require(state.Usages.Length==0);
+            }));
+            await Test("Every requested ABNT2 symbol has independently expected physical usage and release", () => Check(() =>
+            {
+                const string chars="'\"`~^´ç?/\\|:;,.<>[]{}-_=+@";
+                PhysicalKey[][] expected = [
+                    [new(0x35)],[new(0x35,2)],[new(0x2F,2),new(0x2C)],[new(0x34),new(0x2C)],
+                    [new(0x34,2),new(0x2C)],[new(0x2F),new(0x2C)],[new(0x33)],
+                    [new(0x87,2)],[new(0x87)],[new(0x64)],[new(0x64,2)],
+                    [new(0x38,2)],[new(0x38)],[new(0x36)],[new(0x37)],[new(0x36,2)],[new(0x37,2)],
+                    [new(0x30)],[new(0x31)],[new(0x30,2)],[new(0x31,2)],
+                    [new(0x2D)],[new(0x2D,2)],[new(0x2E)],[new(0x2E,2)],[new(0x1F,2)]
+                ];
+                Require(chars.Length==expected.Length);
+                for(int i=0;i<chars.Length;i++) { Require(KeyboardLayout.Compose(chars[i],KeyboardLayoutMode.PortugueseBrazilAbnt2).SequenceEqual(expected[i])); }
+                AssertReleases(KeyboardLayout.PrepareText(chars,KeyboardLayoutMode.PortugueseBrazilAbnt2));
+            }));
+            await Test("US punctuation physical usage modifiers and unsupported non-US text rejected", () => Check(() =>
+            {
+                const string chars="'\"`~^?/\\|:;,.<>[]{}-_=+@";
+                byte[] usage=[0x34,0x34,0x35,0x35,0x23,0x38,0x38,0x31,0x31,0x33,0x33,0x36,0x37,0x36,0x37,0x2F,0x30,0x2F,0x30,0x2D,0x2D,0x2E,0x2E,0x1F];
+                const string shifted="\"~^?|:<> {}_+@";
+                for(int i=0;i<chars.Length;i++) { Require(KeyboardLayout.Compose(chars[i],KeyboardLayoutMode.UnitedStates).SequenceEqual(new[] {new PhysicalKey(usage[i],shifted.Contains(chars[i]) ? (byte)2 : (byte)0)})); }
+                AssertReleases(KeyboardLayout.PrepareText(chars,KeyboardLayoutMode.UnitedStates));
+                try { KeyboardLayout.PrepareText("abcç",KeyboardLayoutMode.UnitedStates); throw new Exception("Expected unsupported"); } catch(ArgumentException) { }
+            }));
+            await Test("All requested accents compose dead key then base with neutral after each", () => Check(() =>
+            {
+                const string accents="áàâãéêíóôõú"; byte[] dead=[0x2F,0x2F,0x34,0x34,0x2F,0x34,0x2F,0x2F,0x34,0x34,0x2F];
+                byte[] mods=[0,2,2,0,0,2,0,0,2,0,0]; const string bases="aaaaeeiooou";
+                for(int i=0;i<accents.Length;i++)
+                {
+                    var expected = new[] {new PhysicalKey(dead[i],mods[i]),new PhysicalKey((byte)(4+bases[i]-'a'))};
+                    Require(KeyboardLayout.Compose(accents[i],KeyboardLayoutMode.PortugueseBrazilAbnt2).SequenceEqual(expected));
+                }
+                AssertReleases(KeyboardLayout.PrepareText(accents+"ç",KeyboardLayoutMode.PortugueseBrazilAbnt2));
+            }));
+            await Test("Exit viewport discards queued movement; quick reentry still neutralizes first", async () =>
+            {
+                var fake = new Fake(); var buffer = new InputReportBuffer(); buffer.Enqueue(InputReport.Mouse(0,999,0),true);
+                buffer.ClearAndRelease(); buffer.Enqueue(InputReport.Key(2,[4]));
+                using var token = new CancellationTokenSource(150); using var log=Log();
+                await InputSender.RunAsync(buffer,fake,()=>true,_=>{},log,token.Token,()=>true);
+                Require(fake.MouseSent==0 && fake.KeyboardSent==1 && fake.Release>=2 && fake.FirstAction=="release");
+            });
+            await Test("Outside viewport sends zero movement while active; stopped sender remains silent", async () =>
+            {
+                var fake=new Fake(); var buffer=new InputReportBuffer(); buffer.Enqueue(InputReport.Mouse(1,200,200));
+                using var token=new CancellationTokenSource(90); using var log=Log();
+                await InputSender.RunAsync(buffer,fake,()=>true,_=>{},log,token.Token,()=>false);
+                int stopped=fake.Sent; await Task.Delay(40); Require(stopped==0 && fake.Sent==0 && fake.Release==1 && buffer.Count==0);
+            });
+            await Test("Stop drains an in-flight send before neutral and completion", async () =>
+            {
+                var pending=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var fake=new Fake { HoldSend=pending.Task }; var buffer=new InputReportBuffer(); buffer.Enqueue(InputReport.Mouse(1,10,10));
+                using var token=new CancellationTokenSource(); using var log=Log();
+                var task=InputSender.RunAsync(buffer,fake,()=>true,_=>{},log,token.Token);
+                for(int i=0;i<50 && fake.Sent==0;i++) { await Task.Delay(5); }
+                Require(fake.Sent==1); token.Cancel(); await Task.Delay(25); Require(!task.IsCompleted && fake.Release==0);
+                pending.SetResult(); await task; int sent=fake.Sent; await Task.Delay(25);
+                Require(fake.Release==1 && fake.Sent==sent && fake.Delivered==1);
+            });
+            Console.WriteLine($"PHASE 3 TESTS: {_passed}/{_passed}; UX physical validation pending"); return 0;
         }
         catch(Exception error) { Console.Error.WriteLine(error); return 1; }
     }
     private static BluetoothControlLog Log() => new(Path.Combine("logs","phase3-automated-tests.log"));
+    private static void AssertReleases(byte[][] reports)
+    {
+        Require(reports.Length%2==0);
+        for(int i=0;i<reports.Length;i+=2) { Require(reports[i].Length==8 && reports[i][1]==0 && reports[i+1].All(value=>value==0)); }
+    }
     private sealed class Fake : IBluetoothController
     {
         public bool Live=true, Fail; public int Sent,Release; public double MinGap=double.MaxValue; private DateTimeOffset _last;
         public Action? AfterSend;
+        public int MouseSent,KeyboardSent; public string? FirstAction;
+        public Task? HoldSend; public int Delivered;
         public BluetoothStatus Status => new(Live ? BluetoothState.HidConnected : BluetoothState.Disconnected,"test",[],"fake",Live,Live);
         public event Action<BluetoothStatus>? StatusChanged;
         public Task ConnectAsync(CancellationToken token=default) { StatusChanged?.Invoke(Status); return Task.CompletedTask; }
         public Task DisconnectAsync() { Live=false; StatusChanged?.Invoke(Status); return Task.CompletedTask; }
         public Task SelectHostAsync(string id)=>Task.CompletedTask;
         public Task SetAppearanceAsync(ushort? appearance)=>Task.CompletedTask;
-        private Task Send() { var now=DateTimeOffset.UtcNow; if(Sent!=0) { MinGap=Math.Min(MinGap,(now-_last).TotalMilliseconds); } _last=now; Sent++; AfterSend?.Invoke(); if(Fail) { throw new IOException("simulated notify failure"); } return Task.CompletedTask; }
-        public Task SendMouseAsync(byte buttons,int dx,int dy,int wheel,CancellationToken token)=>Send();
-        public Task SendKeyboardAsync(byte modifiers,byte[] usages,CancellationToken token)=>Send();
-        public Task ReleaseAsync() { Release++; return Task.CompletedTask; }
+        private async Task Send() { var now=DateTimeOffset.UtcNow; if(Sent!=0) { MinGap=Math.Min(MinGap,(now-_last).TotalMilliseconds); } _last=now; Sent++; AfterSend?.Invoke(); if(Fail) { throw new IOException("simulated notify failure"); } if(HoldSend is not null) { await HoldSend; } Delivered++; }
+        public Task SendMouseAsync(byte buttons,int dx,int dy,int wheel,CancellationToken token) { FirstAction ??= "mouse"; MouseSent++; return Send(); }
+        public Task SendKeyboardAsync(byte modifiers,byte[] usages,CancellationToken token) { FirstAction ??= "keyboard"; KeyboardSent++; return Send(); }
+        public Task ReleaseAsync() { FirstAction ??= "release"; Release++; return Task.CompletedTask; }
     }
     private static async Task<int> NativeTest()
     {
@@ -96,6 +201,14 @@ internal static class Program
             for(int attempt=0;attempt<100 && VideoWindow.Find(process.Id) is null;attempt++) { await Task.Delay(50); }
             log.Write("native-test", $"Synthetic Gst exited={process.HasExited}; windows={VideoWindowInspection.Read(process.Id)}; matchingVideo={VideoWindow.Find(process.Id) is not null}");
             Require(VideoWindow.Find(process.Id) is not null && VideoWindow.Find(0) is null && VideoWindow.Find(Environment.ProcessId) is null);
+            var video=VideoWindow.Find(process.Id)!;
+            using(var surface=new VideoCursor(video,()=>(320,640)))
+            {
+                Require(surface.Handle!=0 && surface.Owns(surface.Handle) && !surface.Owns(video.Handle));
+                surface.SetHidden(false); surface.SetHidden(false);
+                surface.Dispose(); Require(surface.Handle==0);
+                log.Write("native-test","Cursor surface created and destroyed idempotently; renderer HWND distinct; no foreign class mutation or ShowCursor counter used");
+            }
             try { await capture.StartAsync(()=>process.HasExited ? 0 : process.Id,()=>(320,640),true,1); }
             catch(InputBlockedException error) when(error.Message.Contains("Selecione a janela",StringComparison.Ordinal))
             {
@@ -104,15 +217,17 @@ internal static class Program
                 return;
             }
             Require(capture.IsActive);
-            fake.Live=false;
-            await capture.Completion.WaitAsync(TimeSpan.FromSeconds(4));
-            Require(!capture.IsActive && fake.Release>=2 && fake.Sent==0);
+            await NativeCursorProbe.RunAsync(video,capture,log);
+            int sentAtStop=fake.Sent; await Task.Delay(40); Require(!capture.IsActive && fake.Sent==sentAtStop);
             fake.Live=true;
             await capture.StartAsync(()=>process.Id,()=>(640,320),false,2);
             Require(capture.IsActive);
+            fake.Live=false; await capture.Completion.WaitAsync(TimeSpan.FromSeconds(4));
+            Require(!capture.IsActive && fake.Release>=4);
+            fake.Live=true; await capture.StartAsync(()=>process.Id,()=>(320,640),false,2);
             await capture.StopAsync("native smoke stop"); await capture.StopAsync();
-            Require(!capture.IsActive && fake.Release>=4 && fake.Sent==0);
-            log.Write("native-test","Actual Gst HWND matched owned PID; real hooks installed; fake HID disconnect removed hooks and released; reactivation/stop passed; no physical input emitted");
+            Require(!capture.IsActive && fake.Release>=6);
+            log.Write("native-test","Actual Gst HWND matched owned PID; real hooks installed; fake HID disconnect removed hooks and released; reactivation/stop passed; no physical HID input emitted");
         }
         finally
         {

@@ -33,6 +33,7 @@ internal static class Native
 {
     internal delegate bool WindowCallback(nint window, nint param);
     internal delegate nint HookCallback(int code, nint message, nint data);
+    internal delegate void EventCallback(nint hook,uint eventId,nint window,int objectId,int child,uint thread,uint time);
     [StructLayout(LayoutKind.Sequential)] internal struct Point { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] internal struct Mouse { public Point Point; public uint Data, Flags, Time; public nuint Extra; }
@@ -46,6 +47,10 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern nint GetAncestor(nint window, uint flags);
     [DllImport("user32.dll")] internal static extern bool GetClientRect(nint window, out Rect rect);
     [DllImport("user32.dll")] internal static extern bool ScreenToClient(nint window, ref Point point);
+    [DllImport("user32.dll")] internal static extern bool ClientToScreen(nint window, ref Point point);
+    [DllImport("user32.dll")] internal static extern nint WindowFromPoint(Point point);
+    [DllImport("user32.dll")] internal static extern bool TranslateMessage(ref Message message);
+    [DllImport("user32.dll")] internal static extern nint DispatchMessage(ref Message message);
     [DllImport("user32.dll", SetLastError = true)] internal static extern nint SetWindowsHookEx(int id, HookCallback callback, nint module, uint thread);
     [DllImport("user32.dll")] internal static extern bool UnhookWindowsHookEx(nint hook);
     [DllImport("user32.dll")] internal static extern nint CallNextHookEx(nint hook, int code, nint message, nint data);
@@ -57,6 +62,8 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(nint window);
     [DllImport("user32.dll")] internal static extern bool GetCursorPos(out Point point);
+    [DllImport("user32.dll")] internal static extern nint SetWinEventHook(uint min,uint max,nint module,EventCallback callback,uint process,uint thread,uint flags);
+    [DllImport("user32.dll")] internal static extern bool UnhookWinEvent(nint hook);
     [DllImport("user32.dll")] internal static extern nint SetThreadDpiAwarenessContext(nint context);
     [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] internal static extern nint GetModuleHandle(string? name);

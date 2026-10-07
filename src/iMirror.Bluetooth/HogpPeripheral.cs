@@ -493,7 +493,8 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
             timeout.CancelAfter(TimeSpan.FromSeconds(3));
             GattClientNotificationResult result = await characteristic.NotifyValueAsync(
                 CryptographicBuffer.CreateFromByteArray(payload), target).AsTask(timeout.Token);
-            log.Write("notify", $"{Kind(id)} {(neutral ? "neutral/release" : "input")}; bytes={payload.Length}; Status={result.Status}; ProtocolError={result.ProtocolError?.ToString() ?? "none"}; physical effect unconfirmed");
+            if (neutral || result.Status != GattCommunicationStatus.Success)
+            { log.Write("notify", $"{Kind(id)} {(neutral ? "neutral/release" : "input")}; bytes={payload.Length}; Status={result.Status}; ProtocolError={result.ProtocolError?.ToString() ?? "none"}; physical effect unconfirmed"); }
             if (result.Status != GattCommunicationStatus.Success)
             { throw new InputBlockedException($"Notify {Kind(id)} falhou: {result.Status}."); }
             if (neutral) { _pendingRelease.TryRemove(id, out _); }

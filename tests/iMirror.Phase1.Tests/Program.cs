@@ -219,6 +219,12 @@ internal static class Program
         {
             window.Show(); Pump();
             var control = (Button)window.FindName("ControlButton");
+            var speed=(Slider)window.FindName("CursorSpeedSlider"); var layouts=(ComboBox)window.FindName("KeyboardLayoutSelector");
+            Assert(speed.Minimum==0.25 && speed.Maximum==3 && model.CursorSpeed==1 && layouts.Items.Count==3,"UX defaults or layout choices incorrect.");
+            speed.Value=0.25; Pump(); Assert(model.CursorSpeed==0.25,"Speed binding failed.");
+            layouts.SelectedItem=iMirror.Input.KeyboardLayoutMode.PortugueseBrazilAbnt2; Pump();
+            Assert(model.KeyboardLayoutMode==iMirror.Input.KeyboardLayoutMode.PortugueseBrazilAbnt2,"Layout binding failed.");
+            SavePreview(window,Path.Combine(directory,"phase3b-options.png"));
             Assert(!control.IsEnabled && !model.CanControl,"Control allowed without mouse subscriber.");
             model.BluetoothCommand.Execute(null);
             while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }

@@ -35,7 +35,8 @@
         <TextBlock Text="No iPhone: Central de Controle → Espelhamento de Tela → iMirror - Windows" Foreground="#A6ADBA" Margin="0,8,0,0" TextAlignment="Center" TextWrapping="Wrap" />
       </StackPanel>
     </Border>
-    <StackPanel Grid.Row="2" Margin="0,12,0,12">
+    <ScrollViewer Grid.Row="2" MaxHeight="250" VerticalScrollBarVisibility="Auto" Margin="0,12,0,12">
+    <StackPanel>
       <TextBlock Text="{Binding AirPlay.StateText, StringFormat='AirPlay: {0}'}" FontWeight="SemiBold" TextWrapping="Wrap" />
       <TextBlock Text="{Binding Bluetooth.StateText, StringFormat='Bluetooth: {0}'}" Margin="0,4,0,0" />
       <WrapPanel Margin="0,6,0,4">
@@ -45,11 +46,21 @@
       </WrapPanel>
       <TextBlock Text="{Binding HidStatus}" FontSize="12" />
       <TextBlock Text="{Binding ControlStatus}" FontSize="12" Margin="0,3,0,0" />
-      <TextBlock Text="No iPhone, abra Ajustes > Bluetooth e toque neste PC. Para visualizar o cursor: Ajustes > Acessibilidade > Toque > AssistiveTouch." TextWrapping="Wrap" FontSize="12" Foreground="#555B66" Margin="0,4,0,0" />
+      <TextBlock Text="No iPhone: Ajustes > Bluetooth > este PC. Para o cursor: Ajustes > Acessibilidade > Toque > AssistiveTouch = ON." TextWrapping="Wrap" FontSize="12" Foreground="#555B66" Margin="0,4,0,0" />
+      <TextBlock Text="Quer continuar usando o teclado do próprio iPhone? Ative 'Mostrar Teclado na Tela' no AssistiveTouch (recomendado)." TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
+      <WrapPanel Margin="0,5,0,0">
+        <TextBlock Text="Velocidade do cursor:" VerticalAlignment="Center" />
+        <Slider x:Name="CursorSpeedSlider" Minimum="0.25" Maximum="3" TickFrequency="0.05" Value="{Binding CursorSpeed}" Width="145" Margin="6,0" ToolTip="Multiplicador linear; padrão 1x. Reative o controle depois de ajustar." />
+        <TextBlock Text="{Binding CursorSpeed, StringFormat='{}{0:F2}x'}" VerticalAlignment="Center" Margin="0,0,12,0" />
+        <TextBlock Text="Layout:" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <ComboBox x:Name="KeyboardLayoutSelector" ItemsSource="{Binding KeyboardLayouts}" SelectedItem="{Binding KeyboardLayoutMode}" Width="215" />
+      </WrapPanel>
+      <TextBlock Text="Para melhor correspondência, configure no iPhone: Ajustes > Geral > Teclado > Teclado Físico com o mesmo layout selecionado aqui." FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
       <Expander Header="Host, diagnóstico HID e opções" Margin="0,4,0,0">
         <StackPanel>
           <ComboBox ItemsSource="{Binding Hosts}" SelectedItem="{Binding SelectedHost}" DisplayMemberPath="DisplayName" MinWidth="200" HorizontalAlignment="Left" />
           <TextBlock Text="{Binding HostDiagnostics}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,4" />
+          <TextBlock Text="Não é necessário ativar Adaptações de Toque, Controle de Permanência ou Teclas do Mouse. Deixe Controle de Permanência e Teclas do Mouse OFF." FontSize="12" TextWrapping="Wrap" Margin="0,3,0,5" />
           <WrapPanel>
             <TextBlock Text="Wheel:" VerticalAlignment="Center" />
             <Slider Minimum="1" Maximum="5" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding WheelIntensity}" Width="100" Margin="5,0,8,0" />
@@ -67,6 +78,7 @@
       <TextBlock Text="{Binding TimingMetrics}" Foreground="#555B66" Margin="0,4,0,0" />
       <TextBlock Text="{Binding Notice}" TextWrapping="Wrap" Foreground="#555B66" Margin="0,8,0,0" />
     </StackPanel>
+    </ScrollViewer>
     <Grid Grid.Row="3">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto" />

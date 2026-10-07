@@ -26,7 +26,7 @@ public static class VirtualKeyMap
         0x2D => 0x49, 0x24 => 0x4A, 0x21 => 0x4B, 0x2E => 0x4C, 0x23 => 0x4D, 0x22 => 0x4E,
         0xBD => 0x2D, 0xBB => 0x2E, 0xDB => 0x2F, 0xDD => 0x30, 0xDC => 0x31,
         0xBA => 0x33, 0xDE => 0x34, 0xC0 => 0x35, 0xBC => 0x36, 0xBE => 0x37, 0xBF => 0x38,
-        _ => 0 // ESC is exclusively local; layout translation is deliberately US physical keys.
+        _ => 0 // ESC is exclusively local; US fallback. Capture maps OEM scan codes through KeyboardLayout.
     };
     public static byte Modifier(int key) => key switch
     { 0xA2 => 1, 0xA0 => 2, 0xA4 => 4, 0x5B => 8, 0xA3 => 16, 0xA1 => 32, 0xA5 => 64, 0x5C => 128, _ => 0 };
@@ -34,10 +34,11 @@ public static class VirtualKeyMap
 
 public sealed class KeyboardState
 {
-    private readonly HashSet<int> _pressed = [];
-    public bool Update(int key, bool down) => down ? _pressed.Add(key) : _pressed.Remove(key);
-    public byte Modifiers => (byte)_pressed.Aggregate(0, (bits, key) => bits | VirtualKeyMap.Modifier(key));
-    public byte[] Usages => _pressed.Select(VirtualKeyMap.Usage).Where(usage => usage != 0).Distinct().ToArray();
+    private readonly Dictionary<int, byte> _pressed = [];
+    public bool Update(int key, bool down) => Update(key, down, VirtualKeyMap.Usage(key));
+    public bool Update(int key, bool down, byte usage) => down ? _pressed.TryAdd(key, usage) : _pressed.Remove(key);
+    public byte Modifiers => (byte)_pressed.Keys.Aggregate(0, (bits, key) => bits | VirtualKeyMap.Modifier(key));
+    public byte[] Usages => _pressed.Values.Where(usage => usage != 0).Distinct().ToArray();
     public void Reset() => _pressed.Clear();
 }
 
@@ -54,6 +55,11 @@ public sealed class InputReportBuffer(int capacity = 128)
     private readonly object _gate = new();
     private readonly LinkedList<InputReport> _queue = [];
     private bool _lastWasMotion;
+    private bool _releaseRequested;
+    private int _generation;
+    public int Generation { get { lock (_gate) { return _generation; } } }
+    public bool TakeReleaseRequest() { lock (_gate) { bool value = _releaseRequested; _releaseRequested = false; return value; } }
+    public void ClearAndRelease() { lock (_gate) { _queue.Clear(); _lastWasMotion = false; _releaseRequested = true; _generation++; } }
     public int Count { get { lock (_gate) { return _queue.Count; } } }
     public bool Enqueue(InputReport report, bool motion = false)
     {

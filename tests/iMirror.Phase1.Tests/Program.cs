@@ -326,6 +326,8 @@ internal static class Program
             Assert(!model.CanControl && !control.IsEnabled && !model.Bluetooth.IsConnected,"Disconnected input remains enabled.");
             receiver.Stream(); bluetooth.PublishWindowsOnly(); Pump();
             Assert(!model.CanControl && !control.IsEnabled && !model.Bluetooth.IsConnected && model.WindowsBluetoothStatus.Contains("BLE") && model.PairingGuidance.Contains("vínculo BLE"),"OS BLE link/bond must be visible without enabling HID input.");
+            Assert(model.BluetoothSummary.Contains("Sem resposta HID após 30 s"), "Timeout remains visibly waiting instead of explaining missing HID response.");
+            SavePreview(window,Path.Combine(directory,"bluetooth-timeout-feedback.png"));
         }
         finally
         {

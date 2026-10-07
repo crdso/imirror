@@ -25,6 +25,7 @@ public sealed partial class MainViewModel
         BluetoothState.RadioOff => "Bluetooth desligado",
         BluetoothState.Error => "Erro no Bluetooth · confira Diagnóstico",
         BluetoothState.Stopped => "HID não iniciado",
+        BluetoothState.WaitingForPairing when Bluetooth.PairingTimedOut => "Sem resposta HID após 30 s · anúncio mantido",
         _ => Bluetooth.Message
     };
     public string PairingSteps
@@ -43,7 +44,7 @@ public sealed partial class MainViewModel
         Bluetooth.WindowsObservation?.BleConnected == true ?
         "O Windows detectou um vínculo BLE, mas o iMirror não recebeu atividade HID. Pode haver falha antes da leitura criptografada ou cache antigo; a causa ainda não foi confirmada." :
         "Nenhuma atividade HID chegou ao iMirror. Se o iPhone informa conectado, isso ainda não confirma BLE HID. Confira os vínculos do Windows abaixo e use Problemas para parear?." :
-        "Pareie em Ajustes → Bluetooth. AssistiveTouch só é necessário para mostrar o ponteiro. A conexão é confirmada pelos subscribers reais.";
+        "No iPhone: Ajustes → Acessibilidade → Toque → AssistiveTouch → Dispositivos → Dispositivos Bluetooth. A conexão HID é confirmada pelos subscribers reais.";
     public string WindowsBluetoothStatus => Bluetooth.WindowsObservation is { } snapshot ? snapshot.Summary +
         (snapshot.Links.Count == 0 ? "\nNenhum vínculo conhecido foi retornado nesta consulta. Isso não é uma captura de todos os links BLE do rádio." :
         "\n" + string.Join("\n", snapshot.Links.Take(8).Select(link => $"{link.DisplayName} · {link.Transport} · {(link.Paired ? "pareado" : "não pareado")} · {(link.Connected == true ? "conectado" : link.Connected == false ? "desconectado" : "link não informado")}")) + "\nVínculos conhecidos; esta consulta não captura todos os links do rádio.") :

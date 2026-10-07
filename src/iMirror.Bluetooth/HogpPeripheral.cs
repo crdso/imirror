@@ -53,6 +53,7 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
     private bool _everConnected;
     private DateTimeOffset _pairingStarted = DateTimeOffset.UtcNow;
     private bool _wasReady;
+    private bool _wasPairingTimedOut;
     private int _resumeAdvertisingPending;
     public bool CanRecreateAfterStop { get; private set; } = true;
     public void BeginPairing() { _pairingStarted = DateTimeOffset.UtcNow; Interlocked.Exchange(ref _resumeAdvertisingPending, 0); EnsureAdvertising("explicit pairing window"); Publish(); }
@@ -92,6 +93,11 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
                 $"{status.Advertising}:{status.PairingTimedOut}:" + string.Join(";", status.Hosts.Select(host => $"{host.Alias}:{host.DisplayName}:{host.ConnectionStatus}:{host.GattActive}:{host.Bonded}:{host.KeyboardSubscribed}:{host.MouseSubscribed}:{host.HidInformationRead}:{host.ReportMapRead}:{host.ProtocolModeWritten}"));
             if (signature == _lastPublished) { return; }
             _lastPublished = signature;
+            if (status.PairingTimedOut && !_wasPairingTimedOut)
+            {
+                log.Write("pairing-timeout", $"Visual wait expired after 30s; advertising={status.Advertising}; gattActive={status.Hosts.Any(host => host.GattActive)}; keyboard={status.KeyboardConnected}; mouse={status.MouseConnected}; same provider retained; no disconnect inferred");
+            }
+            _wasPairingTimedOut = status.PairingTimedOut;
             if (status.ControlReady != _wasReady) { log.Write(status.ControlReady ? "reconnect" : "disconnect", $"keyboard={status.KeyboardConnected}; mouse={status.MouseConnected}; same provider retained; capture must be enabled manually"); _wasReady = status.ControlReady; }
             StatusChanged?.Invoke(status);
         }

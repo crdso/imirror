@@ -1,17 +1,18 @@
 using System.Text;
 using System.Text.Json;
+using iMirror.Core.Diagnostics;
 
 namespace iMirror.AirPlay;
 
 internal sealed class AirPlayAttemptLog : IDisposable
 {
-    private readonly StreamWriter _writer;
+    private readonly BoundedLogFile _writer;
     private readonly object _gate = new();
     public AirPlayAttemptLog(AirPlayOptions options)
     {
         var path = Path.GetFullPath(options.AttemptLogPath!);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        _writer = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read), new UTF8Encoding(false)) { AutoFlush = true };
+        _writer = new BoundedLogFile(path);
         Write("SESSION START: UxPlay-iOS27; physical outcome not yet known; sanitized negotiation allowlist only");
         Write($"Expected UxPlay={AirPlayOptions.SupportedUxPlayVersion}; h265={options.EnableH265}; sink={options.VideoSink}; decoder={options.VideoDecoder}; receiver={options.ReceiverName}; ports={options.BasePort}-{options.BasePort + 2}");
     }

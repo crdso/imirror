@@ -7,7 +7,7 @@ namespace iMirror.Bluetooth;
 public sealed class BluetoothControlLog : IDisposable
 {
     private readonly object _gate = new();
-    private readonly StreamWriter _writer;
+    private readonly BoundedLogFile _writer;
     private readonly bool _echo;
     private bool _closed;
     public event Action<string, string>? Written;
@@ -16,7 +16,7 @@ public sealed class BluetoothControlLog : IDisposable
     {
         _echo = echo;
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        _writer = new StreamWriter(path, append: true, new UTF8Encoding(false)) { AutoFlush = true };
+        _writer = new BoundedLogFile(path);
     }
 
     public void Write(string category, string message)

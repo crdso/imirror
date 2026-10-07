@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -41,7 +42,9 @@ internal static class Program
         {
             Test("Logs persistem e mantêm apenas 500 entradas em memória", () => CheckLogHistory(args[0]));
             Test("Falha de caminho de log é visível", () => CheckLogFailure(args[0]));
+            Test("Rotação limita tamanho, sessões e preserva logs alheios", () => CheckRotation(args[0]));
             Test("Janela, bindings e botões informam disponibilidade real", () => CheckWindow(args[0]));
+            Test("Páginas responsivas, diagnóstico retrátil e filtros", () => CheckPresentation(args[0]));
             Test("UI BLE exige subscriber, restringe ativação e reflete desconexão", () => CheckBluetoothUi(args[0]));
             Test("Botão AirPlay diagnostica a instalação real sem bloquear a UI", () => CheckAirPlayButton(args[0]));
             Test("Executável abre e encerra sem erro", () => CheckExecutable(args));
@@ -96,6 +99,73 @@ internal static class Program
         try { using var log = new FileDiagnosticLog(Path.Combine(file, "logs")); }
         catch (IOException) { return; }
         throw new InvalidOperationException("Falha de persistência foi ocultada.");
+    }
+
+    private static void CheckRotation(string directory)
+    {
+        var folder = Path.Combine(directory, "rotation"); Directory.CreateDirectory(folder);
+        var unrelated = Path.Combine(folder, "physical-evidence.txt"); File.WriteAllText(unrelated, "preserve");
+        var path = Path.Combine(folder, "bounded.log");
+        using (var log = new BoundedLogFile(path, maxBytes: 1024))
+        { for (var i = 0; i < 100; i++) { log.WriteLine($"{i}: ação " + new string('ç', 160)); } }
+        var files = Directory.GetFiles(folder, "bounded.log*");
+        Assert(files.Length == 5 && files.All(file => new FileInfo(file).Length <= 1024), "Log rotation size/count exceeded.");
+        Assert(File.ReadAllText(path).Contains("99: ação") && File.ReadAllText(unrelated) == "preserve", "Latest entry lost or unrelated file changed.");
+        using (var log = new BoundedLogFile(path, maxBytes: 1024)) { log.WriteLine("reopened"); }
+        Assert(File.ReadAllText(path).Contains("reopened"), "Reopening lost new log.");
+        var sessions = Path.Combine(folder, "sessions");
+        for (var i = 0; i < 9; i++) { using var log = new FileDiagnosticLog(sessions); log.Write(LogLevel.Information, "Test", "session"); }
+        Assert(Directory.GetFiles(sessions).Length == 5, "Session logs accumulate indefinitely.");
+    }
+
+    private static void CheckPresentation(string directory)
+    {
+        using var log = new FileDiagnosticLog(Path.Combine(directory, "presentation"));
+        using var model = new MainViewModel(log, new MissingReceiver(), new PhaseOneBluetoothService(log), Dispatcher.CurrentDispatcher, log.FilePath);
+        var window = new MainWindow(model) { ShowActivated=false, ShowInTaskbar=false, Left=-10000, Top=-10000, WindowStartupLocation=WindowStartupLocation.Manual };
+        try
+        {
+            window.Show(); Pump();
+            Assert(!model.DiagnosticsOpen && !((FrameworkElement)window.FindName("DiagnosticsPanel")).IsVisible, "Logs permanently occupy the screen.");
+            using var responsiveModel = new MainViewModel(log, new MissingReceiver(), new PhaseOneBluetoothService(log), Dispatcher.CurrentDispatcher, log.FilePath);
+            var responsiveWindow = new MainWindow(responsiveModel);
+            var content=(FrameworkElement)responsiveWindow.Content;
+            content.DataContext=responsiveModel;
+            content.Resources.MergedDictionaries.Add(responsiveWindow.Resources);
+            TextElement.SetFontFamily(content,responsiveWindow.FontFamily); TextElement.SetFontSize(content,responsiveWindow.FontSize);
+            TextElement.SetForeground(content,responsiveWindow.Foreground);
+            responsiveWindow.Content=null; // Never attach this visual to an HWND.
+            foreach (var size in new[] { (1366,768), (1920,1080), (2560,1440) })
+            {
+                // Detach the visual from the monitor-capped HWND so no native layout clip
+                // hides the right side of a viewport larger than this notebook's display.
+                for (var page=0; page<5; page++)
+                {
+                    responsiveModel.SelectedPage=page; Pump();
+                    content.Measure(new Size(size.Item1,size.Item2)); content.Arrange(new Rect(0,0,size.Item1,size.Item2)); content.UpdateLayout();
+                    Assert(Math.Abs(content.ActualWidth-size.Item1)<1 && Math.Abs(content.ActualHeight-size.Item2)<1, $"Requested viewport {size} became {content.RenderSize}.");
+                    if (page==0) { Assert(((Border)responsiveWindow.FindName("VideoPlaceholder")).ActualHeight>=160, "Video area collapsed."); }
+                    SaveElementPreview(content, window.Background, Path.Combine(directory, $"ux-{size.Item1}-{page}.png"));
+                }
+            }
+            responsiveWindow.Close(); Pump();
+            model.SelectedPage=1; model.ToggleFullscreen(); Pump();
+            Assert(!((FrameworkElement)window.FindName("Sidebar")).IsVisible && !((FrameworkElement)window.FindName("Header")).IsVisible && model.SelectedPage==0, "Fullscreen chrome not hidden.");
+            model.ToggleFullscreen(); Pump(); Assert(model.SelectedPage==1, "Fullscreen lost selected page.");
+            log.Write(LogLevel.Information, "AirPlay", "receiver"); log.Write(LogLevel.Information, "BLE/input", "capture"); log.Write(LogLevel.Error, "UI", "test error"); Pump();
+            model.DiagnosticsCommand.Execute(null); Pump(); Assert(((FrameworkElement)window.FindName("DiagnosticsPanel")).IsVisible, "Diagnostics does not open.");
+            model.LogFilter="Erro"; Assert(model.LogView.Cast<LogEntry>().All(entry=>entry.Level==LogLevel.Error), "Error filter leaks unrelated entries.");
+            model.LogFilter="Input"; Assert(model.LogView.Cast<LogEntry>().Single().Source=="BLE/input", "Input filter incorrect.");
+            model.LogFilter="Todos"; Pump();
+            var list=(ListBox)window.FindName("LogList"); list.UpdateLayout(); Pump();
+            Assert(list.Items.Count==model.Logs.Count && list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem { Content: LogEntry }, "Filtered logs did not render in the diagnostic list.");
+            SavePreview(window, Path.Combine(directory,"ux-diagnostics.png"));
+            model.ClearLogsCommand.Execute(null);
+            using var reader = new StreamReader(new FileStream(log.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+            Assert(model.Logs.Count==0 && reader.ReadToEnd().Contains("test error"), "Clear deleted persisted evidence.");
+            model.CloseDiagnosticsCommand.Execute(null); Pump(); Assert(!((FrameworkElement)window.FindName("DiagnosticsPanel")).IsVisible,"Diagnostics does not close.");
+        }
+        finally { window.Close(); Pump(); }
     }
 
     private static void CheckWindow(string directory)
@@ -321,12 +391,16 @@ internal static class Program
     {
         // VisualBrush ignores the parent's margin transform. Draw the window background explicitly.
         var content = (FrameworkElement)window.Content;
+        SaveElementPreview(content,window.Background,path);
+    }
+    private static void SaveElementPreview(FrameworkElement content, Brush background, string path)
+    {
         var width = content.ActualWidth + content.Margin.Left + content.Margin.Right;
         var height = content.ActualHeight + content.Margin.Top + content.Margin.Bottom;
         var drawing = new DrawingVisual();
         using (var context = drawing.RenderOpen())
         {
-            context.DrawRectangle(window.Background, null, new Rect(0, 0, width, height));
+            context.DrawRectangle(background, null, new Rect(0, 0, width, height));
             context.DrawRectangle(new VisualBrush(content), null,
                 new Rect(content.Margin.Left, content.Margin.Top, content.ActualWidth, content.ActualHeight));
         }

@@ -9,7 +9,7 @@ public sealed class FileDiagnosticLog : IDiagnosticLog, IDisposable
     public const int HistoryCapacity = 500;
     private readonly object _gate = new();
     private readonly Queue<LogEntry> _history = new();
-    private readonly StreamWriter _writer;
+    private readonly BoundedLogFile _writer;
     private bool _disposed;
 
     public FileDiagnosticLog(string directory)
@@ -17,8 +17,7 @@ public sealed class FileDiagnosticLog : IDiagnosticLog, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         Directory.CreateDirectory(directory);
         FilePath = Path.Combine(directory, $"iMirror-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.log");
-        _writer = new StreamWriter(new FileStream(FilePath, FileMode.CreateNew, FileAccess.Write,
-            FileShare.Read), new UTF8Encoding(false)) { AutoFlush = true };
+        _writer = new BoundedLogFile(FilePath, append: false, familyPattern: "iMirror-*.log*");
     }
 
     public string FilePath { get; }

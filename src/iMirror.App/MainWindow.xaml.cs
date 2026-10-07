@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
 
@@ -16,12 +17,23 @@ public partial class MainWindow : Window
     private bool _closed;
     private bool _shutdownComplete;
     private bool _closingRequested;
+    private int _previousPage;
+    private IInputElement? _beforeDiagnosticsFocus;
 
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
         _viewModel = viewModel;
         DataContext = viewModel;
+        // Stable automation names belong to the shell; pages keep their own WPF namescopes.
+        RegisterName("VideoPlaceholder", MirrorPage.VideoPlaceholder);
+        RegisterName("AirPlayButton", MirrorPage.AirPlayButton);
+        RegisterName("FullscreenButton", MirrorPage.FullscreenButton);
+        RegisterName("BluetoothButton", ControlPage.BluetoothButton);
+        RegisterName("ControlButton", ControlPage.ControlButton);
+        RegisterName("CursorSpeedSlider", ControlPage.CursorSpeedSlider);
+        RegisterName("KeyboardLayoutSelector", KeyboardPage.KeyboardLayoutSelector);
+        RegisterName("LogList", DiagnosticsPanel.LogList);
         viewModel.PropertyChanged += OnViewModelChanged;
         ((INotifyCollectionChanged)viewModel.Logs).CollectionChanged += OnLogsChanged;
         PreviewKeyDown += OnPreviewKeyDown;
@@ -58,9 +70,22 @@ public partial class MainWindow : Window
 
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(MainViewModel.DiagnosticsOpen))
+        {
+            if (_viewModel.DiagnosticsOpen)
+            {
+                _beforeDiagnosticsFocus = Keyboard.FocusedElement;
+                Dispatcher.BeginInvoke(new Action(() => { if (!_closed && _viewModel.DiagnosticsOpen) { DiagnosticsPanel.MoveFocus(new TraversalRequest(FocusNavigationDirection.First)); } }));
+            }
+            else if (_beforeDiagnosticsFocus is FrameworkElement { IsVisible: true } element) { Keyboard.Focus(element); }
+            return;
+        }
         if (e.PropertyName != nameof(MainViewModel.IsFullscreen)) { return; }
         if (_viewModel.IsFullscreen)
         {
+            _previousPage = _viewModel.SelectedPage;
+            _viewModel.SelectedPage = 0;
+            _viewModel.DiagnosticsOpen = false;
             _previousState = WindowState;
             _previousStyle = WindowStyle;
             _previousResizeMode = ResizeMode;
@@ -71,6 +96,7 @@ public partial class MainWindow : Window
         }
         else
         {
+            _viewModel.SelectedPage = _previousPage;
             WindowState = WindowState.Normal;
             WindowStyle = _previousStyle;
             ResizeMode = _previousResizeMode;
@@ -80,6 +106,11 @@ public partial class MainWindow : Window
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape)
+        {
+            _viewModel.ReleaseControl();
+            if (_viewModel.DiagnosticsOpen) { _viewModel.DiagnosticsOpen = false; e.Handled = true; return; }
+        }
         if (e.Key == Key.F11 || (e.Key == Key.Escape && _viewModel.IsFullscreen))
         {
             _viewModel.ToggleFullscreen();
@@ -95,7 +126,10 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
             _scrollPending = false;
-            if (!_closed && _viewModel.Logs.Count > 0) { LogList.ScrollIntoView(_viewModel.Logs[^1]); }
+            if (!_closed && _viewModel.DiagnosticsOpen && DiagnosticsPanel.LogList.Items.Count > 0)
+            { DiagnosticsPanel.LogList.ScrollIntoView(DiagnosticsPanel.LogList.Items[^1]); }
         }));
     }
+    private void OnNavigate(object sender, RoutedEventArgs args)
+    { if (sender is RadioButton { Tag: string page } && DataContext is MainViewModel model) { model.SelectedPage = int.Parse(page, System.Globalization.CultureInfo.InvariantCulture); } }
 }

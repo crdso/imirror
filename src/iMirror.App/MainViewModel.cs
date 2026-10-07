@@ -11,7 +11,7 @@ using Microsoft.Win32;
 
 namespace iMirror.App;
 
-public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
+public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly IDiagnosticLog _log;
     private readonly Dispatcher _dispatcher;
@@ -86,6 +86,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             }
         }, BluetoothError, dispatcher);
         FullscreenCommand = new RelayCommand(ToggleFullscreen);
+        InitializePresentation();
     }
 
     public AirPlayStatus AirPlay { get; private set; }
@@ -98,7 +99,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
     private async Task ChangeHostAsync(string id)
     { try { await StopControlAsync(); await Task.Run(() => _bluetooth.SelectHostAsync(id)); } catch (Exception error) { BluetoothError(error); } }
-    public string BluetoothButtonText => _bluetoothStarted ? "Desconectar controle Bluetooth" : "Conectar controle Bluetooth";
+    public string BluetoothButtonText => Bluetooth.State == BluetoothState.Starting ? "Conectando..." : _bluetoothStarted ? "Desconectar Bluetooth" : "Conectar Bluetooth";
     public string HidStatus => $"Keyboard: {(Bluetooth.KeyboardConnected ? "conectado" : "aguardando")}  |  Mouse: {(Bluetooth.MouseConnected ? "conectado" : "aguardando")}  |  {(Bluetooth.ProtocolMode == 1 ? "Report mode" : "Boot mode: sem wheel")}";
     public string HostDiagnostics => SelectedHost is { } host ? $"HID Information: {host.HidInformationRead}; Report Map: {host.ReportMapRead}; Protocol Mode escrito: {host.ProtocolModeWritten}; Bond: {host.Bonded}; Link: {host.ConnectionStatus}" : "Nenhum host HID nesta sessão. O nome anunciado é o nome Bluetooth deste PC.";
     public bool ControlActive => _capture?.IsActive == true;
@@ -159,7 +160,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             AirPlay = status;
             Notice = status.State == AirPlayState.Error ? status.Message :
                 "AirPlay e controle BLE validados no iPhone. Ajustes de cursor e teclado aguardam seu teste.";
-            foreach (var name in new[] { nameof(AirPlay), nameof(ConnectionStatus), nameof(AirPlayButtonText), nameof(VideoMetrics), nameof(TimingMetrics) })
+            foreach (var name in new[] { nameof(AirPlay), nameof(ConnectionStatus), nameof(AirPlayButtonText), nameof(VideoMetrics), nameof(TimingMetrics), nameof(PhoneHeadline), nameof(MirrorTitle), nameof(MirrorInstruction), nameof(CanFocusVideo) })
             { OnPropertyChanged(name); }
             RefreshControl();
         }
@@ -198,7 +199,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
     private void OnCaptureStopped(string reason) => Dispatch(() => { Notice = $"Controle parado: {reason}. Input devolvido ao Windows."; RefreshControl(); });
     private void RefreshControl()
-    { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanChangeAppearance) }) { OnPropertyChanged(name); } }
+    { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanChangeAppearance), nameof(BluetoothSummary), nameof(ControlSummary) }) { OnPropertyChanged(name); } }
     private void Dispatch(Action action)
     { if (_disposed || _dispatcher.HasShutdownStarted) { return; } if (_dispatcher.CheckAccess()) { action(); } else { _dispatcher.BeginInvoke(action); } }
     private void OnPowerMode(object sender, PowerModeChangedEventArgs args)

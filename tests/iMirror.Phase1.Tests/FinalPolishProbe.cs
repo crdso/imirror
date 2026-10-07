@@ -58,6 +58,8 @@ internal static class FinalPolishProbe
         }
         Require(DiagnosticVisibility.IsVerbose(new(DateTimeOffset.Now,LogLevel.Warning,"UxPlay stderr","gstvideodecoder Guessing PTS")),"Chatty native line leaked into normal UI.");
         Require(!DiagnosticVisibility.IsVerbose(new(DateTimeOffset.Now,LogLevel.Warning,"UxPlay stderr","WARNING: decoder failed")),"Real native warning hidden.");
+        Require(DiagnosticVisibility.IsVerbose(new(DateTimeOffset.Now,LogLevel.Information,"Video renderer","GStreamer INFO [videodecoder]: Guessing PTS")),"Parsed renderer spam leaked into normal UI.");
+        Require(!DiagnosticVisibility.IsVerbose(new(DateTimeOffset.Now,LogLevel.Warning,"Video renderer","Decoder allocation warning")),"Parsed native warning hidden.");
     }
     public static void CheckRenderer(string directory)
     {

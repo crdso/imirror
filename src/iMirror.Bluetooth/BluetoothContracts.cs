@@ -6,7 +6,8 @@ public sealed record BluetoothHost(string Id, string Alias, string DisplayName, 
     bool HidInformationRead, bool ReportMapRead, bool ProtocolModeWritten, bool GattActive = false);
 public sealed record BluetoothStatus(BluetoothState State, string Message, IReadOnlyList<BluetoothHost> Hosts,
     string? SelectedHostId = null, bool KeyboardConnected = false, bool MouseConnected = false, byte ProtocolMode = 1,
-    bool Advertising = false, bool RadioOn = false, bool PairingTimedOut = false, int ProviderGeneration = 0)
+    bool Advertising = false, bool RadioOn = false, bool PairingTimedOut = false, int ProviderGeneration = 0,
+    WindowsBluetoothSnapshot? WindowsObservation = null)
 {
     public static BluetoothStatus Stopped { get; } = new(BluetoothState.Stopped, "Controle Bluetooth desligado", []);
     public string StateText => Message;

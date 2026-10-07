@@ -15,6 +15,7 @@ internal static class Program
         {
             if (args.Contains("--native")) { return await NativeTest(); }
             if (args.Contains("--native-lifetime")) { return await NativeLifetimeTest(); }
+            if (args.Contains("--native-associations")) { return await NativeAssociationsTest(); }
             if (args.Contains("--native-cursor"))
             { using var cursorLog=new BluetoothControlLog(Path.Combine("logs","phase3b-native-cursor.log"),echo:true); await NativeCaptureTest(cursorLog); return 0; }
             await Test("Report Map upstream unchanged except required ABNT2 usage range", () => Check(() =>
@@ -140,6 +141,14 @@ internal static class Program
             await Test("HOGP disconnect/reconnect keeps provider and selected host", HogpLifecycleProbe.Reconnect);
             await Test("Explicit HID reset recreates exactly once and shutdown releases", HogpLifecycleProbe.Reset);
             await Test("Unconfirmed native advertising stop blocks duplicate provider until exit", HogpLifecycleProbe.UnconfirmedStop);
+            await Test("Windows BLE link/bond cannot promote HID connection or select input target", () => Check(() =>
+            {
+                var links = new WindowsBluetoothSnapshot(true,[new("W1","test","BLE",true,true)]);
+                var status = BluetoothStatus.Stopped with { WindowsObservation=links, RadioOn=true, Advertising=true };
+                Require(links.BleConnected && !status.IsConnected && !status.ControlReady && status.SelectedHostId is null && status.DiagnosticHost is null);
+                Require(!new WindowsBluetoothSnapshot(true,[new("W2","test","Classic",true,true)]).BleConnected);
+                Require(!new WindowsBluetoothSnapshot(true,[new("W3","test","BLE",true,null)]).BleConnected);
+            }));
             await Test("Bond, GATT, metadata, CCCD and physical effect are distinct", () => Check(HogpLifecycleProbe.States));
             await Test("Panel recovery shortcut respects registration and Shift fallback", () => Check(() =>
             {
@@ -226,6 +235,18 @@ internal static class Program
             }
             else { Require(controller.Status.ProviderGeneration == generation + 1); log.Write("native-validation", "PASS: native stop confirmed; one explicit reset only"); }
         }
+        return 0;
+    }
+    private static async Task<int> NativeAssociationsTest()
+    {
+        using var log = new BluetoothControlLog(Path.Combine("logs","bluetooth-native-associations.log"), echo:true);
+        using var observer = new WindowsBluetoothObservation(log);
+        var completed = new TaskCompletionSource<WindowsBluetoothSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        observer.Changed += snapshot => { if (snapshot.Complete || snapshot.Issue is not null) { completed.TrySetResult(snapshot); } };
+        observer.Start();
+        var snapshot = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Require(snapshot is { Complete:true, Issue:null });
+        log.Write("native-validation", $"PASS: native Classic/BLE watchers completed; known endpoints={snapshot.Links.Count}; no HID provider created; no pairing, advertising or input sent");
         return 0;
     }
     private static async Task NativeCaptureTest(BluetoothControlLog log)

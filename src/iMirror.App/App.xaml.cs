@@ -49,6 +49,11 @@ public partial class App : Application
                 _bluetoothLog, () => owned.ProcessId);
             MainWindow = new MainWindow(_viewModel);
             MainWindow.Show();
+            if (e.Args.Contains("--start-bluetooth", StringComparer.Ordinal))
+            {
+                _viewModel.SelectedPage = 1;
+                Dispatcher.BeginInvoke(new Action(() => _viewModel.BluetoothCommand.Execute(null)));
+            }
             if (e.Args.Contains("--start-airplay", StringComparer.Ordinal))
             {
                 Dispatcher.BeginInvoke(new Action(() => _viewModel.AirPlayCommand.Execute(null)));

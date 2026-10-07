@@ -40,8 +40,14 @@ public sealed partial class MainViewModel
     }
     public string PairingGuidance => Bluetooth.State == BluetoothState.Error ? Bluetooth.Message : Bluetooth.PairingTimedOut ? Bluetooth.DiagnosticHost?.GattActive == true ?
         "Pareamento detectado, mas o iPhone não ativou Mouse/Keyboard HID. O serviço continua disponível." :
-        "Ainda aguardando o iPhone — o serviço continua disponível. Se o PC aparece conectado no iPhone, pode ser a entrada Bluetooth normal em vez da BLE HID." :
+        Bluetooth.WindowsObservation?.BleConnected == true ?
+        "O Windows detectou um vínculo BLE, mas o iMirror não recebeu atividade HID. Pode haver falha antes da leitura criptografada ou cache antigo; a causa ainda não foi confirmada." :
+        "Nenhuma atividade HID chegou ao iMirror. Se o iPhone informa conectado, isso ainda não confirma BLE HID. Confira os vínculos do Windows abaixo e use Problemas para parear?." :
         "Pareie em Ajustes → Bluetooth. AssistiveTouch só é necessário para mostrar o ponteiro. A conexão é confirmada pelos subscribers reais.";
+    public string WindowsBluetoothStatus => Bluetooth.WindowsObservation is { } snapshot ? snapshot.Summary +
+        (snapshot.Links.Count == 0 ? "\nNenhum vínculo conhecido foi retornado nesta consulta. Isso não é uma captura de todos os links BLE do rádio." :
+        "\n" + string.Join("\n", snapshot.Links.Take(8).Select(link => $"{link.DisplayName} · {link.Transport} · {(link.Paired ? "pareado" : "não pareado")} · {(link.Connected == true ? "conectado" : link.Connected == false ? "desconectado" : "link não informado")}")) + "\nVínculos conhecidos; esta consulta não captura todos os links do rádio.") :
+        "Os vínculos Classic/BLE do Windows serão observados ao iniciar Bluetooth. Eles não confirmam subscriptions HID.";
     private bool _autoSizeVideo = true, _focusMode;
     public bool AutoSizeVideo { get => _autoSizeVideo; set { _autoSizeVideo = value; OnPropertyChanged(); } }
     public bool FocusMode { get => _focusMode; set { _focusMode = value; OnPropertyChanged(); } }

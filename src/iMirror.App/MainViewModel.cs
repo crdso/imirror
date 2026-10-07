@@ -204,7 +204,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             Bluetooth = status;
             if (status.State == BluetoothState.Starting) { _appearanceIndex = 0; OnPropertyChanged(nameof(AppearanceIndex)); }
             _selectedHost = status.Hosts.FirstOrDefault(host => host.Id == status.SelectedHostId);
-            foreach (var name in new[] { nameof(Bluetooth), nameof(Hosts), nameof(SelectedHost), nameof(HidStatus), nameof(HostDiagnostics), nameof(PairingSteps), nameof(PairingGuidance) }) { OnPropertyChanged(name); }
+            foreach (var name in new[] { nameof(Bluetooth), nameof(Hosts), nameof(SelectedHost), nameof(HidStatus), nameof(HostDiagnostics), nameof(PairingSteps), nameof(PairingGuidance), nameof(WindowsBluetoothStatus) }) { OnPropertyChanged(name); }
             RefreshControl();
         });
     }

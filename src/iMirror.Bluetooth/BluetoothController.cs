@@ -8,9 +8,22 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     private bool _recreationBlocked;
     private Semaphore? _instance;
     private volatile BluetoothStatus _status = BluetoothStatus.Stopped;
+    private readonly object _statusGate = new();
+    private WindowsBluetoothObservation? _windowsObserver;
     public BluetoothStatus Status => _status;
     public event Action<BluetoothStatus>? StatusChanged;
-    private void Set(BluetoothStatus status) { _status = status with { ProviderGeneration = _generation }; StatusChanged?.Invoke(_status); }
+    private void Set(BluetoothStatus status)
+    {
+        BluetoothStatus next;
+        lock (_statusGate) { next = _status = status with { ProviderGeneration = _generation, WindowsObservation = _status.WindowsObservation }; }
+        StatusChanged?.Invoke(next);
+    }
+    private void OnWindowsObservation(WindowsBluetoothSnapshot snapshot)
+    {
+        BluetoothStatus next;
+        lock (_statusGate) { next = _status = _status with { WindowsObservation = snapshot }; }
+        StatusChanged?.Invoke(next);
+    }
 
     public async Task ConnectAsync(CancellationToken token = default)
     {
@@ -18,6 +31,10 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
         try
         {
             RequireSafeRecreation();
+            if (factory is null && _windowsObserver is null)
+            {
+                _windowsObserver = new(log); _windowsObserver.Changed += OnWindowsObservation; _windowsObserver.Start();
+            }
             if (_peripheral is not null) { _peripheral.BeginPairing(); Set(_peripheral.GetStatus()); log.Write("pairing", $"generation={_generation}; reuse provider; visual pairing window renewed"); return; }
             Set(new(BluetoothState.Starting, "Iniciando controle Bluetooth...", []));
             _instance = new Semaphore(1, 1, "Local\\iMirror.BleHidProbe.Instance");
@@ -43,7 +60,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     public async Task DisconnectAsync()
     {
         await _lifecycle.WaitAsync();
-        try { await CleanupAsync(); ReleaseInstance(); Set(BluetoothStatus.Stopped with { State = BluetoothState.Disconnected, Message = "Desconectado — reconecte em Ajustes > Bluetooth se necessário" }); }
+        try { await CleanupAsync(); ReleaseInstance(); _windowsObserver?.Dispose(); _windowsObserver = null; Set(BluetoothStatus.Stopped with { State = BluetoothState.Disconnected, Message = "Desconectado — reconecte em Ajustes > Bluetooth se necessário" }); }
         finally { _lifecycle.Release(); }
     }
 

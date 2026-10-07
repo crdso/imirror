@@ -166,7 +166,7 @@ internal static class Program
             using var reader = new StreamReader(new FileStream(log.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
             Assert(model.Logs.Count==0 && reader.ReadToEnd().Contains("test error"), "Clear deleted persisted evidence.");
             log.Write(LogLevel.Information,"AirPlay","Streaming");
-            for (int i=0;i<600;i++) { log.Write(LogLevel.Information,"UxPlay stdout","feedback: Guessing PTS"); }
+            for (int i=0;i<600;i++) { log.Write(LogLevel.Information,i%2==0 ? "UxPlay stdout" : "Video renderer","GStreamer INFO [videodecoder]: gstvideodecoder.c:3171 Guessing PTS"); }
             Pump(); Assert(model.Logs.Any(entry=>entry.Message=="Streaming") && model.AllLogs.Count==500,"Verbose traffic erased relevant UI events or exceeded bounds.");
             model.LogFilter="Verbose"; Assert(model.LogView.Cast<LogEntry>().Any(entry=>entry.Message.Contains("Guessing PTS")),"Verbose filter hides native detail.");
             model.LogFilter="Todos"; Assert(!model.LogView.Cast<LogEntry>().Any(entry=>entry.Message.Contains("Guessing PTS")),"Normal filter floods native detail.");
@@ -324,6 +324,8 @@ internal static class Program
             Assert(!receiver.IsRunning && bluetooth.Disconnects == 0 && model.Bluetooth.MouseConnected,"Stop AirPlay destroyed HOGP.");
             bluetooth.Publish(false,false); Pump();
             Assert(!model.CanControl && !control.IsEnabled && !model.Bluetooth.IsConnected,"Disconnected input remains enabled.");
+            receiver.Stream(); bluetooth.PublishWindowsOnly(); Pump();
+            Assert(!model.CanControl && !control.IsEnabled && !model.Bluetooth.IsConnected && model.WindowsBluetoothStatus.Contains("BLE") && model.PairingGuidance.Contains("vínculo BLE"),"OS BLE link/bond must be visible without enabling HID input.");
         }
         finally
         {
@@ -340,6 +342,12 @@ internal static class Program
         {
             Status = new(keyboard||mouse ? BluetoothState.HidConnected : BluetoothState.Disconnected,"test",
                 [new("fake","H1","Test host",true,"test",keyboard,mouse,true,true,true)],"fake",keyboard,mouse);
+            StatusChanged?.Invoke(Status);
+        }
+        public void PublishWindowsOnly()
+        {
+            Status = new(BluetoothState.WaitingForPairing,"Aguardando iPhone",[], Advertising:true, RadioOn:true, PairingTimedOut:true,
+                WindowsObservation:new(true,[new("W1","Test iPhone","BLE",true,true)]));
             StatusChanged?.Invoke(Status);
         }
         public Task ConnectAsync(CancellationToken token=default) { Connects++; Status=new(BluetoothState.WaitingForPairing,"Aguardando pareamento",[]); StatusChanged?.Invoke(Status); return Task.CompletedTask; }

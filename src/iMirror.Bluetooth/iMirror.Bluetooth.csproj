@@ -4,5 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\iMirror.Core\iMirror.Core.csproj" />
+    <InternalsVisibleTo Include="iMirror.Phase3.Tests" />
   </ItemGroup>
 </Project>

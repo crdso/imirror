@@ -1,0 +1,14 @@
+diff --git a/uxplay.cpp b/uxplay.cpp
+--- a/uxplay.cpp
++++ b/uxplay.cpp
+@@ -2946,9 +2946,7 @@ int main (int argc, char *argv[]) {
+     
+ #ifdef _WIN32    /*  use utf-8 terminal output; don't buffer stdout in WIN32 when debug_log = false */
+     SetConsoleOutputCP(CP_UTF8);
+-    if (!debug_log) {
+-        setbuf(stdout, NULL);
+-    }
++    setbuf(stdout, NULL); // iMirror: live redirected debug logs
+ #endif
+ 
+     LOGI("UxPlay %s: An Open-Source AirPlay mirroring and audio-streaming server.", VERSION);

@@ -1,0 +1,9 @@
+{
+  "UxPlayPath": ".tools/msys64/ucrt64/bin/uxplay.exe",
+  "GStreamerBinPath": ".tools/msys64/ucrt64/bin",
+  "BonjourDirectory": ".tools/msys64/ucrt64/bin",
+  "ReceiverName": "iMirror - Windows",
+  "BasePort": 35000,
+  "VideoDecoder": "avdec_h264",
+  "VideoSink": "d3d11videosink"
+}

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\net10.0-windows\</OutputPath>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\iMirror.App\iMirror.App.csproj" />
+  </ItemGroup>
+  <ItemGroup><Content Include="..\..\tools\send-ctrl-c.ps1" Link="send-ctrl-c.ps1" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+</Project>

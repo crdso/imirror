@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\net10.0-windows\</OutputPath>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>iMirror</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="..\..\tools\send-ctrl-c.ps1" Link="send-ctrl-c.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\iMirror.Core\iMirror.Core.csproj" />
+    <ProjectReference Include="..\iMirror.AirPlay\iMirror.AirPlay.csproj" />
+    <ProjectReference Include="..\iMirror.Bluetooth\iMirror.Bluetooth.csproj" />
+    <ProjectReference Include="..\iMirror.Input\iMirror.Input.csproj" />
+  </ItemGroup>
+</Project>

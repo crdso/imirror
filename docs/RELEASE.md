@@ -14,6 +14,12 @@ Requisitos: Windows x64 10/11 build 19041+, adaptador Bluetooth com BLE peripher
 4. Em **Teclado**, escolha Auto, Português Brasil ABNT2 ou US e use o mesmo layout em Teclado Físico no iPhone. Após ajustes de velocidade/layout, reative o controle.
 5. **Diagnóstico** abre os logs; Limpar afeta apenas a lista. Logs em `%LOCALAPPDATA%/iMirror/logs`, limitados a 5 MiB × 5 arquivos por família.
 
+**Pareamento:** acompanhe as etapas em Controle. Subscriber real confirma mouse/teclado; bond ou conexão no painel do iPhone não bastam. Conectar novamente e parar AirPlay não destroem HOGP. Timeout de 30s é apenas visual. Se houver duas entradas do PC, confirme a correta pelas etapas; sem atividade, esqueça somente a entrada tentada e experimente a outra. AssistiveTouch serve para o ponteiro, não para parear. Reset HID em Configurações exige confirmação e recria uma vez somente após parada confirmada. Se o Windows ainda reportar anúncio ativo, o app pede para fechar e reabrir, sem criar outro provider nesta sessão.
+
+**Modo foco:** Configurações → Ocultar painel durante o espelhamento. Volte pela bandeja ou Ctrl+Alt+I (fallback Ctrl+Alt+Shift+I se ocupado). Durante captura, o atalho libera input e mostra o painel. F11 é independente. A janela do iPhone recebe ícone vermelho, título limpo e ajuste opcional de aspect/DPI com debounce. Última posição/tamanho do painel é validada contra os monitores atuais.
+
+Ícones estão embutidos no EXE; não exigem rede nem arquivos do checkout. Diagnóstico → Verbose mostra detalhes recentes; logs completos permanecem rotativos.
+
 Gravação ainda não foi implementada. O mouse é relativo; posicionamento absoluto não é oferecido. A nova UX ainda requer seu teste.
 
 PHASE 3 BLE TRANSPORT: PHYSICALLY VALIDATED

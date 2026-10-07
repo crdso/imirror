@@ -56,9 +56,15 @@ O Bonjour é um serviço instalado separadamente; a DLL do pacote não substitui
 
 **Reconexão:** reconecte em Ajustes → Bluetooth se necessário e reative o controle. A captura não recomeça automaticamente após perda do link/suspensão.
 
+**Pareamento HID:** o provider permanece vivo até encerrar o app. Parar AirPlay/controle e clicar Conectar Bluetooth novamente não recriam HOGP. A página Controle mostra sessão GATT, HID Information, Report Map e subscribers reais de Keyboard/Mouse. Após 30s há aviso visual; o serviço continua disponível. Duas entradas do PC podem ser Classic/BLE: confirme pelas etapas HID; sem atividade, esqueça apenas aquela entrada no iPhone e tente a outra. AssistiveTouch não é necessário para parear. **Problemas para parear?** orienta a recuperação; **Reiniciar serviço HID**, em Configurações, é um reset único com confirmação. Se o Windows não confirmar a parada do anúncio anterior, feche e reabra o app: ele bloqueia outra criação na mesma sessão.
+
+**Janelas / modo foco:** o painel abre dimensionado e centralizado na WorkArea, com último tamanho/posição validado. A janela **iMirror — iPhone** usa o ícone vermelho e ajuste opcional à resolução/orientação/DPI; não interfere no resize manual até mudar o stream. Em Configurações, ative **Ocultar painel durante o espelhamento**. Ele só desaparece com renderer visível; volta pela bandeja ou **Ctrl+Alt+I**, com **Ctrl+Alt+Shift+I** como fallback. Durante captura, o atalho também libera input. Parada, erro ou fechamento do renderer recuperam o painel. F11 continua independente.
+
 **Gravação:** ainda não implementada no código atual; a página informa sua indisponibilidade.
 
 **Diagnóstico:** botão no topo ou Configurações. Painel limitado com filtros, Copiar, Limpar e Abrir pasta. Limpar afeta só a lista; arquivos continuam persistidos. Logs de runtime ficam em %LOCALAPPDATA%/iMirror/logs, até 5 MiB por arquivo e 5 arquivos por família. No desenvolvimento, logs de controle/tentativas também usam logs/ do projeto.
+
+O filtro normal preserva eventos relevantes; **Verbose** mostra detalhes nativos recentes sem apagar a lista relevante. Arquivos continuam completos e rotativos; Bluetooth inclui session/id local e geração do provider, sem MAC, PIN ou payload de teclas. Ícones são assets embutidos locais; nenhum Imgur é acessado em runtime. Veja [validação do polimento](docs/FINAL_POLISH_VALIDATION.md).
 
 ## Desenvolvimento e build
 

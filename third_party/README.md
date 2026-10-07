@@ -28,5 +28,9 @@ Hashes SHA256 da preparação em 2026-10-05:
 Recompilação pode produzir outro hash; registrar novamente ao distribuir. Antes de
 redistribuir o conjunto, revisar licenças de todos os pacotes, fontes correspondentes,
 patches e avisos aplicáveis. Separação de processo não declara dispensa de obrigações.
-Nenhum pacote de redistribuição produzido. windows-ble-hid segue referência MIT da fase3,
-sem alterações/reutilização.
+O release local agora inclui somente a closure de DLLs e plugins verificados,
+manifesto SHA256, estas instruções, a licença UxPlay e o patch. As licenças disponíveis
+dos pacotes MSYS2 estão em runtime/airplay/licenses. Não foi publicada uma release binária
+no GitHub nesta tarefa; apenas fonte e documentação são enviados por Git.
+windows-ble-hid segue referência MIT da fase3; o Report Map adaptado e seu aviso estão
+em src/iMirror.Bluetooth/HidSchema.cs.

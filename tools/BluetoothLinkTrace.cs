@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 namespace iMirror.Diagnostics
 {
     // Diagnostic-only x64 ETW consumer. No ETL file, packet dump, peer addresses,
-    // authentication material, SMP data, ATT data or HID reports are persisted.
+    // authentication material, SMP keys, ATT contents or HID reports are persisted.
     // Layouts: evntrace.h EVENT_TRACE_LOGFILEW and evntcons.h EVENT_RECORD.
     public sealed class BluetoothLinkTrace : IDisposable
     {
@@ -101,8 +101,8 @@ namespace iMirror.Diagnostics
                 _task = Task.Run(() => { uint result = ProcessTrace(new[] { _consumer }, 1, IntPtr.Zero, IntPtr.Zero);
                     if (result != 0 && result != 1223) { Line("ProcessTrace Win32=" + result); } });
                 Guid provider = Provider;
-                // HCIRAW is consumed only in memory; OnRecord discards everything
-                // except numeric status fields of allowlisted HCI controller events.
+                // HCIRAW is consumed only in memory; OnRecord allows numeric
+                // status/error and advertisement metadata, never packet dumps.
                 Check(EnableTraceEx2(_session, ref provider, 1, 4, 0x8000000000000000UL, 0, 0, IntPtr.Zero), "EnableTraceEx2");
                 Line("TRACE STARTED; session=" + _name + "; realtime only; no ETL; controller status allowlist; all radio links, not proof of iPhone identity");
             }
@@ -155,14 +155,18 @@ namespace iMirror.Diagnostics
         // Also exercised by fixtures with the entire Event 402 BIP envelope.
         // BIP kinds are not H4 packet types. On this Windows provider, kind 2
         // carries HCI events (verified with TDH metadata and native advertising
-        // CommandComplete responses); do not interpret kind 4/data as events.
+        // CommandComplete responses); kind 1 permits safe advertising metadata,
+        // kind 3 permits complete error responses only, never arbitrary contents.
         public string DecodeBip(IntPtr data, int size)
         {
                 if (data == IntPtr.Zero || size < 8) { return null; }
                 int type = Marshal.ReadByte(data, 3);
                 uint length = unchecked((uint)Marshal.ReadInt32(data, 4));
-                if (type != 2 || length != size - 8 || length < 2) { return null; }
+                if (length != size - 8 || length < 2) { return null; }
                 IntPtr packet = IntPtr.Add(data, 8);
+                if (type == 1) { return AdvertisingMetadata(packet, (int)length); }
+                if (type == 3) { return AclStatus(packet, (int)length); }
+                if (type != 2) { return null; }
                 int code = Marshal.ReadByte(packet), payload = Marshal.ReadByte(packet, 1);
                 if (payload + 2 != length) { return null; }
                 if (code == 0x0E && payload >= 4)
@@ -202,6 +206,62 @@ namespace iMirror.Diagnostics
                     return true;
                 default: return false;
             }
+        }
+        private static ushort Read16(IntPtr data, int offset) { return (ushort)Marshal.ReadInt16(data, offset); }
+        private static string AdvertisingMetadata(IntPtr packet, int size)
+        {
+            if (size < 3 || Marshal.ReadByte(packet, 2) + 3 != size) { return null; }
+            int opcode = Read16(packet, 0);
+            if (opcode == 0x200A && size == 4)
+            { return "LE AdvertisingEnable enabled=" + Marshal.ReadByte(packet, 3); }
+            if (opcode == 0x2006 && size == 18)
+            {
+                int type = Marshal.ReadByte(packet, 7);
+                return "LE AdvertisingParameters type=0x" + type.ToString("X2") + " connectable=" + (type == 0 || type == 1 || type == 4) +
+                    " ownAddressType=" + Marshal.ReadByte(packet, 8) + " channels=0x" + Marshal.ReadByte(packet, 16).ToString("X2") +
+                    " filterPolicy=0x" + Marshal.ReadByte(packet, 17).ToString("X2") + " intervalMinUnits=" + Read16(packet, 3) + " intervalMaxUnits=" + Read16(packet, 5);
+            }
+            if ((opcode == 0x2008 || opcode == 0x2009) && size == 35)
+            {
+                int used = Marshal.ReadByte(packet, 3);
+                if (used > 31) { return null; }
+                bool hid = false, battery = false; int flags = -1;
+                for (int offset = 4; offset < 4 + used; )
+                {
+                    int count = Marshal.ReadByte(packet, offset);
+                    if (count == 0) { break; }
+                    if (count < 1 || offset + count + 1 > 4 + used) { return null; }
+                    int kind = Marshal.ReadByte(packet, offset + 1);
+                    if (kind == 1 && count == 2) { flags = Marshal.ReadByte(packet, offset + 2); }
+                    if (kind == 2 || kind == 3)
+                    {
+                        if ((count - 1) % 2 != 0) { return null; }
+                        for (int position = offset + 2; position < offset + count; position += 2)
+                        { int uuid = Read16(packet, position); hid |= uuid == 0x1812; battery |= uuid == 0x180F; }
+                    }
+                    // Names/manufacturer data/service data/addresses are skipped.
+                    offset += count + 1;
+                }
+                return "LE " + (opcode == 0x2008 ? "AdvertisingData" : "ScanResponseData") + " HID1812=" + hid + " BAS180F=" + battery +
+                    " flags=" + (flags < 0 ? "absent" : "0x" + flags.ToString("X2"));
+            }
+            return null;
+        }
+        private string AclStatus(IntPtr packet, int size)
+        {
+            if (size < 9 || Read16(packet, 2) + 4 != size) { return null; }
+            int flags = Read16(packet, 0), boundary = (flags >> 12) & 3;
+            if ((boundary != 0 && boundary != 2) || Read16(packet, 4) + 8 != size) { return null; }
+            int cid = Read16(packet, 6), opcode = Marshal.ReadByte(packet, 8);
+            // No reassembly: never store fragments which might contain keys/input.
+            string details = null;
+            if (cid == 6 && opcode == 5 && size == 10)
+            { details = "SMP PairingFailed reason=0x" + Marshal.ReadByte(packet, 9).ToString("X2"); }
+            if (cid == 4 && opcode == 1 && size == 13)
+            { details = "ATT ErrorResponse request=0x" + Marshal.ReadByte(packet, 9).ToString("X2") + " error=0x" + Marshal.ReadByte(packet, 12).ToString("X2"); }
+            if (cid == 1 && opcode == 3 && size == 20 && Read16(packet, 10) == 8)
+            { details = "L2CAP ConnectionResponse result=0x" + Read16(packet, 16).ToString("X4") + " status=0x" + Read16(packet, 18).ToString("X4"); }
+            return details == null ? null : details + " " + Alias((ushort)(flags & 0x0FFF), false);
         }
         private static int Needed(int code, IntPtr packet, int payload)
         {

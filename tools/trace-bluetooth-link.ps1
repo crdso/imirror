@@ -34,6 +34,24 @@ if ($SelfTest) {
         @{ Kind=2; Packet=[byte[]](0x05,4,0,1,0,0x13); DeclaredLength=7; Expected=$null },
         @{ Kind=2; Packet=[byte[]](0x05,4,0,1,0,0x13); Size=7; Expected=$null }
     )
+    $envelopes += @(
+        @{ Kind=1; Packet=[byte[]](6,0x20,15,160,0,160,0,0,0,0,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,7,0); Expected='LE AdvertisingParameters type=0x00 connectable=True ownAddressType=0 channels=0x07 filterPolicy=0x00 intervalMinUnits=160 intervalMaxUnits=160' },
+        @{ Kind=1; Packet=[byte[]](6,0x20,15,160,0,160,0,3,0,0,0xAA,0xBB,0xCC,0xDD,0xEE,0xFF,7,0); Expected='LE AdvertisingParameters type=0x03 connectable=False ownAddressType=0 channels=0x07 filterPolicy=0x00 intervalMinUnits=160 intervalMaxUnits=160' },
+        @{ Kind=1; Packet=[byte[]](0x0A,0x20,1,1); Expected='LE AdvertisingEnable enabled=1' },
+        @{ Kind=1; Packet=[byte[]](0x0A,0x20,1,0); Expected='LE AdvertisingEnable enabled=0' },
+        @{ Kind=1; Packet=[byte[]](@(8,0x20,32,12,2,1,6,3,3,0x12,0x18,4,9,65,66,67)+(@(0)*19)); Expected='LE AdvertisingData HID1812=True BAS180F=False flags=0x06' }, # local name ABC is skipped
+        @{ Kind=1; Packet=[byte[]](@(9,0x20,32,4,3,3,0x0F,0x18)+(@(0)*27)); Expected='LE ScanResponseData HID1812=False BAS180F=True flags=absent' },
+        @{ Kind=1; Packet=[byte[]](@(8,0x20,32,4,5,3,0x12,0x18)+(@(0)*27)); Expected=$null }, # truncated AD structure
+        @{ Kind=1; Packet=[byte[]](0xAA,0xFF,2,1,2); Expected=$null }, # arbitrary command/authentication bytes rejected
+        @{ Kind=3; Packet=[byte[]](1,0x20,6,0,2,0,6,0,5,4); Expected='SMP PairingFailed reason=0x04 L1' },
+        @{ Kind=3; Packet=[byte[]](1,0x20,9,0,5,0,4,0,1,0x0A,1,0,0x0F); Expected='ATT ErrorResponse request=0x0A error=0x0F L1' },
+        @{ Kind=3; Packet=[byte[]](1,0x20,16,0,12,0,1,0,3,1,8,0,1,0,2,0,2,0,0,0); Expected='L2CAP ConnectionResponse result=0x0002 status=0x0000 L1' },
+        @{ Kind=3; Packet=[byte[]](@(1,0x20,21,0,17,0,6,0,6)+(@(0xAA)*16)); Expected=$null }, # encryption key rejected
+        @{ Kind=3; Packet=[byte[]](1,0x20,8,0,4,0,4,0,0x1B,1,0,0x42); Expected=$null }, # HID/ATT notification content rejected
+        @{ Kind=3; Packet=[byte[]](1,0x10,6,0,2,0,6,0,5,4); Expected=$null }, # continuation fragment rejected, no reassembly
+        @{ Kind=3; Packet=[byte[]](1,0x20,7,0,2,0,6,0,5,4); Expected=$null }, # invalid ACL length
+        @{ Kind=3; Packet=[byte[]](1,0x20,6,0,2,0,5,0,5,4); Expected=$null } # other CID rejected
+    )
     foreach ($test in $envelopes) {
         $bytes = [byte[]]::new(8 + $test.Packet.Length)
         $bytes[0] = 1; $bytes[1] = 2; $bytes[3] = $test.Kind
@@ -52,7 +70,7 @@ if ($SelfTest) {
             [Runtime.InteropServices.Marshal]::FreeHGlobal($memory)
         }
     }
-    'PASS: 24 controller fixtures; 12 HCI and 12 complete BIP envelopes; keys/data/unknown/truncated rejected; no native trace started.'
+    'PASS: 40 controller fixtures; 12 HCI and 28 BIP envelopes; safe advertising/error metadata; keys/names/input/fragments/unknown/truncated rejected; no native trace started.'
     exit 0
 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -97,7 +115,7 @@ try {
     @{ Session = $trace.SessionName; Started = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     Write-TraceLines
     Write-Host "Coleta ativa por $Seconds segundos. Mantenha uma instância do iMirror. Faça uma tentativa no iPhone. Não altere o rádio durante a coleta."
-    Write-Host 'Não salva ETL, endereços, chaves, pacotes ou teclas. Eventos abrangem todo o rádio; uma sessão não identifica automaticamente o iPhone.'
+    Write-Host 'Salva somente status, metadados de anúncio e códigos de erro de segurança/GATT. Não salva ETL, nomes, endereços, chaves, pacotes ou teclas. Abrange todo o rádio; não identifica automaticamente o iPhone.'
     Write-Host ('Se este processo for forçado a encerrar, pare somente sua sessão: logman stop "{0}" -ets' -f $trace.SessionName)
     $deadline = (Get-Date).AddSeconds($Seconds)
     $heartbeat = (Get-Date).AddSeconds(5)

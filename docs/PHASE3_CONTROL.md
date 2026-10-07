@@ -1,51 +1,44 @@
-# Controle BLE HID no iMirror
+# Controle BLE HID e UX
 
-**PHASE 3: IMPLEMENTED — PENDING PHYSICAL VALIDATION**
+- **PHASE 3 BLE TRANSPORT: PHYSICALLY VALIDATED**
+- **PHASE 3 INPUT: PHYSICALLY VALIDATED**
+- **PHASE 3 UX: UPDATED — PENDING USER VALIDATION**
 
-## Usar
+O usuário confirmou no iPhone 14/iOS 27.0.1: pairing HOGP, subscribers de mouse/teclado, cursor AssistiveTouch, movimento, clique, letras básicas e controle simultâneo ao AirPlay. Wheel, reconexão, rotação e as novas opções de UX precisam de confirmação específica; não foram promovidos pelo teste local.
 
-1. No iMirror, **Iniciar AirPlay**; no iPhone, Espelhamento de Tela → **iMirror - Windows**.
-2. **Conectar controle Bluetooth**. No iPhone, **Ajustes > Bluetooth**, toque no nome deste PC e confirme o pareamento quando solicitado.
-3. Para visualizar o cursor, ative **Ajustes > Acessibilidade > Toque > AssistiveTouch**. Teclado não exige AssistiveTouch.
-4. Aguarde **Mouse: conectado** e, para digitar, **Keyboard: conectado**. Bond/advertising sozinhos não habilitam controle.
-5. **Ativar controle**, mova o mouse para o vídeo. O click atua no cursor relativo do iPhone, sem promessa de toque absoluto no ponto do mouse do Windows.
-6. **ESC**, **Ctrl+Alt+Q**, perda de foco da janela de vídeo ou **Desativar controle** devolvem input ao Windows. Ative novamente quando quiser controlar.
+## Configurar e testar a UX
 
-Confirme movimento, click, wheel positivo/negativo, digitação em campo vazio, release após parar, portrait/landscape, perda de conexão/reconexão e AirPlay simultâneo. Tudo isso continua pendente fisicamente. Após reiniciar HOGP/app ou retomar Windows, reconecte em **Ajustes > Bluetooth** se os subscribers não retornarem. Captura nunca reativa sozinha.
+1. Inicie AirPlay, conecte o iPhone ao receiver e aguarde vídeo externo. Conecte controle Bluetooth e aguarde os dois subscribers.
+2. No iPhone: **Ajustes > Acessibilidade > Toque > AssistiveTouch = ON**. Ative **Mostrar Teclado na Tela** se quiser continuar usando o teclado virtual. Deixe **Controle de Permanência** e **Teclas do Mouse OFF**; não é necessário ativar **Adaptações de Toque**.
+3. Selecione **PortugueseBrazilAbnt2**, ou Auto com Português Brasil ativo no Windows. No iPhone: **Ajustes > Geral > Teclado > Teclado Físico**, escolha o layout correspondente. Para US, selecione UnitedStates nos dois lados.
+4. Ajuste **Velocidade do cursor** entre 0,25x e 3x; 1x é o padrão. Alterar a opção encerra a captura: reative depois de ajustar.
+5. Clique **Ativar controle** e entre no viewport. Deve aparecer somente o cursor AssistiveTouch. Sair do viewport, ESC, Ctrl+Alt+Q, perda de foreground, desconexão ou parada deve restaurar o cursor local. Teste também parar enquanto tecla/botão estiver pressionado.
+6. Em um campo vazio, teste `aspas simples e duplas`, `? / \ | : ; , . < > [ ] { } - _ = + @`, acentos isolados e `á à â ã é ê í ó ô õ ú ç`. Teclas mortas seguidas de Space geram o acento isolado.
+7. Reporte cursor oculto/restaurado, velocidades 0,25/1/3x, símbolos, acentos, wheel, portrait/landscape e reconexão. Pare com ESC antes de mudar de janela ou encerrar.
 
-## Arquitetura
+## Implementação e segurança
 
-- Bluetooth: HID 0x1812 + Battery 0x180F, criptografia, CCCD do Windows, host selecionado e notify direcionado. Report Map idêntico ao upstream: teclado ID1/8 bytes; mouse ID2/6 bytes com X/Y relativos de 16 bits. IDs estão apenas no descriptor. Boot reports separados; boot mouse não tem wheel.
-- Input: hooks temporários em thread MTA e worker independente. Somente HWND Gst do receiver pertencente a este iMirror, foreground e viewport válido. Movimento agrupado, fila de 128, intervalo mínimo 16 ms depois de cada envio, releases em erro/stop/perda de foco/link. Dimensões atuais, aspect ratio e DPI físico; sem dupla rotação. ESC é local. Layout físico US; PT-BR/Unicode não garantidos.
-- WPF: conectar/desconectar, subscriptions separadas, host, capturar teclado, wheel 1–5 e ativação explícita. O PID é rastreado por uma decoração da fábrica existente, sem mudar argumentos/environment/flags AirPlay.
-- Controle direto absoluto/digitizer permanece desabilitado: não há prova física de aceitação pelo iPhone 14/iOS 27.0.1. Geometria não transforma mouse relativo em toque absoluto.
+- HOGP: HID 0x1812, Battery 0x180F, criptografia e CCCD gerenciados pelo Windows. Notify direcionado ao subscriber do host selecionado. Pairing e características existentes preservados.
+- Report Map: teclado ID1/8 bytes e mouse ID2/6 bytes. A única alteração necessária ao layout é o máximo de usages do teclado: 0x65 → **0x87**, incluindo International1 `/ ?` do ABNT2. Máximo lógico usa representação positiva de 16 bits. IDs, tamanhos, modificadores e descriptor do mouse são iguais ao upstream validado. O teste compara todo o restante byte a byte com a fixture original.
+- Se o iOS mantiver o descriptor antigo em cache, somente as teclas extras podem exigir esquecer/reparear o PC. Isso é uma possibilidade, não uma etapa automática de instalação.
+- Captura: hooks temporários em MTA, worker separado, HWND Gst pertencente ao receiver atual, foreground, viewport/aspect ratio e DPI físico. Outros HWNDs sobre o vídeo também ficam fora da captura. Fila de 128, coalescing apenas entre movimentos consecutivos e pacing mínimo de 16 ms após cada envio.
+- Saída do viewport descarta a fila e registra release pendente com geração da fila. Uma saída/reentrada rápida não perde o release. Teclas previamente pressionadas ficam locais até key-up.
+- Parada desativa o envio e devolve input/cursor imediatamente; o pump mantém hooks em modo pass-through enquanto o worker drena o envio em andamento e tenta keyboard neutral → mouse neutral. Depois remove hooks, encerra a superfície e zera acumuladores. **Stopped** só é registrado após a conclusão. Sem link, o transporte mantém sincronização neutra pendente.
+- Cursor: testes reais retornaram Access Denied ao alterar a classe do processo GStreamer. A solução usa superfície Win32 própria, sem ativação, acima somente do viewport. WM_SETCURSOR executa no nosso thread; não usa ShowCursor, SetSystemCursor, AttachThreadInput nem subclassing externo. A superfície é layered com alpha **1/255**, necessário para hit testing (alpha zero deixa o mouse passar), e desaparece em cleanup/process exit. Não há confinamento do ponteiro nem reparenting do vídeo.
+- Velocidade: multiplicação linear dos deltas antes do clamp HID, com resto fracionário e descarte de overflow. Sem aceleração própria.
+- Teclado: scan codes OEM e usages padrão; Auto lê o HKL do thread do receiver. Letras/dígitos/modificadores seguem estados físicos. Dead keys e releases são encaminhados; o layout de hardware do iOS compõe os caracteres. A API diagnóstica de composição produz press + neutral para cada tecla, sem Unicode falso.
+- Consumer Control/Eject não foi adicionado: não foi encontrada comprovação suficiente de Show Keyboard confiável no iOS. A orientação usa a [opção oficial da Apple](https://support.apple.com/guide/iphone/use-assistivetouch-iph96b21954/ios).
 
-## Limitações verificadas
+## Evidências locais
 
-O anúncio paralelo upstream com UUID 0x1812 e Appearance 0x03C1/0x03C2 foi implementado e testado. Neste Windows 19045, Start retorna **0x80070005**: os tipos AD 0x03 e 0x19 são reservados. A UI informa a limitação e mantém HOGP normal; não faz retry administrativo. [Microsoft Publisher](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.advertisement.bluetoothleadvertisementpublisher).
+Debug/Release e suites das Fases 1–3 verificam lifecycle, input, fila, pacing, modifiers, todos os símbolos/acentos e ausência de novos envios após parada. O probe isolado conserva seus próprios testes de reports/releases.
 
-GattServiceProvider não expõe Dispose/IClosable no SDK 19041. Cleanup usa StopAdvertising, remove handlers, cancela monitor/timers e solta referências; BluetoothLEDevice é disposed. O registro nativo termina com o processo; não há liberação COM forçada de projeções CsWinRT. Release em link fechado é pendente e sincronizado antes de novo input, sem afirmar entrega após disconnect/kill. Dois ciclos locais de provider foram exercitados no mesmo processo. [Microsoft GattServiceProvider](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovider).
+O teste `--native-cursor` usa videotestsrc → d3d11videosink e **transporte HID falso**. Verifica GetCursorInfo dentro/fora do viewport, reentrada e após Stop, foreground preservado, hooks reais, desconexão simulada e reativação. Não é teste AirPlay nem prova de ação no iPhone.
 
-A automação em background pode não receber permissão de foreground do Windows. Nesse caso a ativação falha com segurança antes de instalar hooks. A prova de ativar/parar os hooks pelo clique real no iMirror integra a validação física pendente.
+Logs locais, ignorados pelo Git: `logs/phase3b-debug-validation.log`, `logs/phase3b-release-validation.log`, `logs/phase3b-native-console.log`, `logs/bluetooth-control.log`. Logs normais não contêm texto digitado nem cada movimento. Notify Success comprova transporte apenas.
 
-Referências: [windows-ble-hid 7d66ef1](https://github.com/abhishek-raj/windows-ble-hid/tree/7d66ef199cc9d3065c7bf0d1bf8379462674e71a), [Microsoft VirtualKeyboard](https://github.com/microsoft/BluetoothLEExplorer/blob/master/BluetoothLEExplorer/BluetoothLEExplorer/Models/VirtualKeyboard.cs). A Microsoft utiliza formato de teclado diferente; aqui prevalece o descriptor upstream, comparado byte a byte. Licença MIT preservada.
+O Windows deste PC rejeita Appearance adicional com 0x80070005; o HOGP normal continua padrão. GattServiceProvider não possui Dispose no SDK usado: cleanup para advertising, remove handlers/monitores e solta referências; o serviço nativo termina com o processo. Nunca há liberação COM forçada. [API Microsoft](https://learn.microsoft.com/en-us/uwp/api/windows.devices.bluetooth.genericattributeprofile.gattserviceprovider).
 
-## Evidências e diagnóstico
+Referências: [windows-ble-hid](https://github.com/abhishek-raj/windows-ble-hid), [Microsoft VirtualKeyboard](https://github.com/microsoft/BluetoothLEExplorer/blob/master/BluetoothLEExplorer/BluetoothLEExplorer/Models/VirtualKeyboard.cs), [layout ABNT2 da Microsoft](https://github.com/MicrosoftDocs/globalization/blob/main/globalization/keyboards/kbdbr_2.html), [layered windows e hit testing](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#layered-windows). Avisos MIT preservados.
 
-**logs/bluetooth-control.log**: capacidade, rádio, GATT, advertising, metadata reads, Protocol Mode, subscribers, alias do host, capture, notify, cleanup e exceções sanitizadas. Sem texto digitado, reports, IDs/MAC completos. Notify Success é transporte, não ação física.
-
-Na UI, expanda **Host, diagnóstico HID e opções**: HID Information, Report Map, Protocol Mode escrito, bond/link e subscriptions. SubscribedClientsChanged evidencia CCCD ativo; a API não fornece evento separado de cada escrita CCCD. Zero hosts significa nenhuma sessão/request observada, sem inferir que o iPhone foi rejeitado em uma etapa específica.
-
-Logs de builds/testes: **logs/phase3-debug-validation.log**, **logs/phase3-release-validation.log**, **logs/phase3-native-validation.log**. O probe **Testar-BLE-HID.cmd** é apenas diagnóstico, compartilhando o transporte. Feche o probe antes do BLE no iMirror.
-
-## Arquivos alterados/criados
-
-- src/iMirror.Bluetooth: iMirror.Bluetooth.csproj, BluetoothContracts.cs, BluetoothControlLog.cs, BluetoothController.cs, HogpPeripheral.cs, HidSchema.cs, ManualInput.cs, AppearanceAdvertiser.cs, THIRD_PARTY_NOTICES.md.
-- src/iMirror.Input: iMirror.Input.csproj, InputModel.cs, InputCapture.cs, InputSender.cs, VideoWindow.cs, README.md.
-- src/iMirror.App: iMirror.App.csproj, App.xaml.cs, MainViewModel.cs, MainWindow.xaml, OwnedReceiverProcessFactory.cs, UnavailableBluetoothController.cs (adaptador só para testes antigos).
-- experiments/BleHidProbe: BleHidProbe.csproj, GlobalUsings.cs, Program.cs, README.md; removidas cópias HidPeripheral.cs, HidSchema.cs, ManualInput.cs, ProbeLog.cs em favor do core compartilhado.
-- tests/iMirror.Phase1.Tests: iMirror.Phase1.Tests.csproj, Program.cs. Novo tests/iMirror.Phase3.Tests: iMirror.Phase3.Tests.csproj, Program.cs, Fixtures/HidDescriptors.Upstream.cs.
-- iMirror.sln, NuGet.Config, tools/test.ps1, README.md, docs/PHASE3_CONTROL.md, docs/PHASE3A_PROBE.md, nota histórica docs/PHASE3_BLE_FEASIBILITY.md.
-
-Nenhum arquivo de src/iMirror.AirPlay, binário UxPlay ou configuração AirPlay foi editado. Bonjour/firewall/WSL/rede/renderer preservados.
-
+**AirPlay, binário UxPlay, perfis, d3d11videosink, Bonjour, firewall e rede não foram alterados nesta fase.**

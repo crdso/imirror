@@ -14,6 +14,7 @@ internal static class Program
         try
         {
             if (args.Contains("--native")) { return await NativeTest(); }
+            if (args.Contains("--native-lifetime")) { return await NativeLifetimeTest(); }
             if (args.Contains("--native-cursor"))
             { using var cursorLog=new BluetoothControlLog(Path.Combine("logs","phase3b-native-cursor.log"),echo:true); await NativeCaptureTest(cursorLog); return 0; }
             await Test("Report Map upstream unchanged except required ABNT2 usage range", () => Check(() =>
@@ -135,6 +136,20 @@ internal static class Program
                 pending.SetResult(); await task; int sent=fake.Sent; await Task.Delay(25);
                 Require(fake.Release==1 && fake.Sent==sent && fake.Delivered==1);
             });
+            await Test("HOGP concurrent Connect reuses one provider; timeout retains generation", HogpLifecycleProbe.Connect);
+            await Test("HOGP disconnect/reconnect keeps provider and selected host", HogpLifecycleProbe.Reconnect);
+            await Test("Explicit HID reset recreates exactly once and shutdown releases", HogpLifecycleProbe.Reset);
+            await Test("Unconfirmed native advertising stop blocks duplicate provider until exit", HogpLifecycleProbe.UnconfirmedStop);
+            await Test("Bond, GATT, metadata, CCCD and physical effect are distinct", () => Check(HogpLifecycleProbe.States));
+            await Test("Panel recovery shortcut respects registration and Shift fallback", () => Check(() =>
+            {
+                Require(CapturePolicy.PanelRecovery(0x49,true,true,false,true,false));
+                Require(CapturePolicy.PanelRecovery(0x49,true,true,true,true,true));
+                Require(!CapturePolicy.PanelRecovery(0x49,true,true,false,true,true));
+                Require(!CapturePolicy.PanelRecovery(0x49,true,true,false,false,false));
+                Require(!CapturePolicy.PanelRecovery(0x49,false,true,false,true,false));
+                Require(CapturePolicy.Emergency(0x1B,false,false) && CapturePolicy.Emergency(0x51,true,true));
+            }));
             Console.WriteLine($"PHASE 3 TESTS: {_passed}/{_passed}; UX physical validation pending"); return 0;
         }
         catch(Exception error) { Console.Error.WriteLine(error); return 1; }
@@ -185,6 +200,32 @@ internal static class Program
             log.Write("native-test",$"Cycle {cycle}/2 start/stop finished; physical validation pending");
         }
         await NativeCaptureTest(log);
+        return 0;
+    }
+    private static async Task<int> NativeLifetimeTest()
+    {
+        using var log = new BluetoothControlLog(Path.Combine("logs","final-polish-native-hid.log"),echo:true);
+        await using var controller = new BluetoothController(log);
+        await controller.ConnectAsync();
+        if (controller.Status.State is BluetoothState.Error or BluetoothState.RadioOff) { return 1; }
+        int generation = controller.Status.ProviderGeneration;
+        for (int attempt=0;attempt<3;attempt++) { await controller.ConnectAsync(); }
+        await Task.Delay(TimeSpan.FromSeconds(31));
+        Require(controller.Status.ProviderGeneration == generation);
+        if (!controller.Status.ControlReady) { Require(controller.Status.PairingTimedOut); }
+        log.Write("native-validation",$"PASS: same generation={generation}; advertising={controller.Status.Advertising}; visual timeout={controller.Status.PairingTimedOut}; keyboard={controller.Status.KeyboardConnected}; mouse={controller.Status.MouseConnected}; no key/click/movement sent; physical validation pending");
+        if (!controller.Status.KeyboardConnected && !controller.Status.MouseConnected)
+        {
+            await controller.RestartAsync();
+            if (controller.Status.State == BluetoothState.Error)
+            {
+                Require(controller.Status.ProviderGeneration == generation && controller.Status.Message.Contains("Feche e reabra", StringComparison.Ordinal));
+                await controller.ConnectAsync();
+                Require(controller.Status.ProviderGeneration == generation && controller.Status.State == BluetoothState.Error);
+                log.Write("native-validation", "PASS: native stop unconfirmed; reset and reconnect safely blocked; no second provider created; reopen app required");
+            }
+            else { Require(controller.Status.ProviderGeneration == generation + 1); log.Write("native-validation", "PASS: native stop confirmed; one explicit reset only"); }
+        }
         return 0;
     }
     private static async Task NativeCaptureTest(BluetoothControlLog log)

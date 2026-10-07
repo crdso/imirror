@@ -5,10 +5,16 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin\$(Configuration)\net10.0-windows\</OutputPath>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\Branding\iMirror.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>iMirror</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <!-- WPF owns startup/DPI. Forms is used only for the native tray icon/menu. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Resource Include="Assets\Branding\*.png;Assets\Branding\*.ico" />
     <Content Include="..\..\tools\send-ctrl-c.ps1" Link="send-ctrl-c.ps1" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <ProjectReference Include="..\iMirror.Core\iMirror.Core.csproj" />
     <ProjectReference Include="..\iMirror.AirPlay\iMirror.AirPlay.csproj" />

@@ -3,6 +3,21 @@
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="{StaticResource PageSpacing}" MaxWidth="850">
     <TextBlock Text="Configurações" Style="{StaticResource PageTitle}"/><TextBlock Text="Conexão e diagnóstico, quando você precisar." Style="{StaticResource Caption}" Margin="0,0,0,24"/>
     <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Diagnóstico" Style="{StaticResource CardTitle}"/><TextBlock Text="{Binding VideoMetrics}" Style="{StaticResource Caption}"/><TextBlock Text="{Binding TimingMetrics}" Style="{StaticResource Caption}" Margin="0,8,0,16"/><Button Content="Abrir diagnóstico" Command="{Binding DiagnosticsCommand}" HorizontalAlignment="Left"/></StackPanel></Border>
-    <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="Dispositivo Bluetooth" Style="{StaticResource CardTitle}"/><ComboBox ItemsSource="{Binding Hosts}" SelectedItem="{Binding SelectedHost}" DisplayMemberPath="DisplayName"/><TextBlock Text="{Binding HostDiagnostics}" Style="{StaticResource Caption}" Margin="0,12,0,16"/><Expander Header="Opções avançadas do anúncio"><StackPanel Margin="0,16,0,0"><ComboBox SelectedIndex="{Binding AppearanceIndex}" IsEnabled="{Binding CanChangeAppearance}"><ComboBoxItem Content="HOGP normal (padrão)"/><ComboBoxItem Content="Appearance Keyboard 0x03C1"/><ComboBoxItem Content="Appearance Mouse 0x03C2"/></ComboBox><TextBlock Text="Appearance alternativo depende do adaptador e do Windows. O perfil normal permanece como padrão." Style="{StaticResource Caption}" Margin="0,12,0,0"/><TextBlock Text="Ponteiro absoluto não validado; o controle atual usa mouse relativo." Style="{StaticResource Caption}" Margin="0,8,0,0"/></StackPanel></Expander></StackPanel></Border>
+    <Border Style="{StaticResource Card}"><StackPanel>
+      <TextBlock Text="Janelas e modo foco" Style="{StaticResource CardTitle}"/>
+      <CheckBox Content="Ajustar janela do iPhone automaticamente" IsChecked="{Binding AutoSizeVideo}" Margin="0,0,0,16"/>
+      <CheckBox Content="Ocultar painel do iMirror durante o espelhamento" IsChecked="{Binding FocusMode}"/>
+      <TextBlock Text="O painel só é ocultado com vídeo visível. Volte pela bandeja ou Ctrl+Alt+I (Ctrl+Alt+Shift+I se houver conflito). F11 é independente." Style="{StaticResource Caption}" Margin="0,12,0,0"/>
+    </StackPanel></Border>
+    <Border Style="{StaticResource Card}"><StackPanel>
+      <TextBlock Text="Dispositivo Bluetooth" Style="{StaticResource CardTitle}"/>
+      <ComboBox ItemsSource="{Binding Hosts}" SelectedItem="{Binding SelectedHost}" DisplayMemberPath="DisplayName"/>
+      <TextBlock Text="{Binding HostDiagnostics}" Style="{StaticResource Caption}" Margin="0,12,0,16"/>
+      <Expander Header="Recuperação avançada HID"><StackPanel Margin="0,16,0,0">
+        <TextBlock Text="Use apenas para recuperar falhas de pareamento. O serviço permanece vivo mesmo ao parar AirPlay ou controle." Style="{StaticResource Caption}" Margin="0,0,0,12"/>
+        <Button Content="Reiniciar serviço HID" Command="{Binding RestartHidCommand}" HorizontalAlignment="Left"/>
+        <TextBlock Text="O Windows usa o nome Bluetooth do PC. O iMirror não remove entradas Classic ou bonds do iPhone. Anúncio Appearance paralelo desativado." Style="{StaticResource Caption}" Margin="0,12,0,0"/>
+      </StackPanel></Expander>
+    </StackPanel></Border>
   </StackPanel></ScrollViewer>
 </UserControl>

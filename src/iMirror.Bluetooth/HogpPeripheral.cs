@@ -9,7 +9,7 @@ namespace iMirror.Bluetooth;
 
 public sealed class InputBlockedException(string message) : Exception(message);
 
-public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, IAsyncDisposable
+public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, IHogpPeripheral
 {
     private sealed class Host(string alias)
     {
@@ -51,6 +51,11 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
     private string _lastPublished = "";
     private Radio? _radio;
     private bool _everConnected;
+    private DateTimeOffset _pairingStarted = DateTimeOffset.UtcNow;
+    private bool _wasReady;
+    private int _resumeAdvertisingPending;
+    public bool CanRecreateAfterStop { get; private set; } = true;
+    public void BeginPairing() { _pairingStarted = DateTimeOffset.UtcNow; Interlocked.Exchange(ref _resumeAdvertisingPending, 0); EnsureAdvertising("explicit pairing window"); Publish(); }
     public event Action<BluetoothStatus>? StatusChanged;
 
     public BluetoothStatus GetStatus()
@@ -71,18 +76,11 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
         var hosts = _hosts.Select(pair => new BluetoothHost(pair.Key, pair.Value.Alias,
             pair.Value.Name ?? pair.Value.Alias, pair.Value.Device?.DeviceInformation.Pairing.IsPaired ?? false,
             pair.Value.Device?.ConnectionStatus.ToString() ?? (_sessions.Any(session => session.Value == pair.Key && session.Key.SessionStatus == GattSessionStatus.Active) ? "GATT Active" : "Disconnected"),
-            keyboard.Contains(pair.Key), mouse.Contains(pair.Key), pair.Value.InfoRead, pair.Value.MapRead, pair.Value.ModeWritten)).OrderBy(host => host.Alias).ToArray();
-        var state = _radio?.State != RadioState.On ? BluetoothState.RadioOff : k || m ? BluetoothState.HidConnected :
-            hosts.Any(host => host.Bonded) ? BluetoothState.BondedWithoutHid : _everConnected ? BluetoothState.Disconnected : BluetoothState.WaitingForPairing;
-        string message = state switch
-        {
-            BluetoothState.RadioOff => "Bluetooth desligado",
-            BluetoothState.HidConnected => "Controle Bluetooth conectado",
-            BluetoothState.BondedWithoutHid => "Pareado sem HID — reconecte em Ajustes > Bluetooth",
-            BluetoothState.Disconnected => "Desconectado — reconecte em Ajustes > Bluetooth",
-            _ => "Aguardando pareamento no iPhone"
-        };
-        return new(state, message, hosts, _selectedId, k, m, _protocolMode);
+            keyboard.Contains(pair.Key), mouse.Contains(pair.Key), pair.Value.InfoRead, pair.Value.MapRead, pair.Value.ModeWritten,
+            _sessions.Any(session => session.Value == pair.Key && session.Key.SessionStatus == GattSessionStatus.Active))).OrderBy(host => host.Alias).ToArray();
+        return PairingStatus.Create(_radio?.State == RadioState.On,
+            _provider?.AdvertisementStatus == GattServiceProviderAdvertisementStatus.Started,
+            hosts, _selectedId, k, m, _protocolMode, _everConnected, DateTimeOffset.UtcNow - _pairingStarted);
     }
 
     private void Publish()
@@ -91,9 +89,11 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
         {
             var status = GetStatus();
             string signature = $"{status.State}:{status.SelectedHostId}:{status.KeyboardConnected}:{status.MouseConnected}:{status.ProtocolMode}:" +
-                string.Join(";", status.Hosts.Select(host => $"{host.Alias}:{host.DisplayName}:{host.ConnectionStatus}:{host.Bonded}:{host.KeyboardSubscribed}:{host.MouseSubscribed}:{host.HidInformationRead}:{host.ReportMapRead}:{host.ProtocolModeWritten}"));
+                $"{status.Advertising}:{status.PairingTimedOut}:" + string.Join(";", status.Hosts.Select(host => $"{host.Alias}:{host.DisplayName}:{host.ConnectionStatus}:{host.GattActive}:{host.Bonded}:{host.KeyboardSubscribed}:{host.MouseSubscribed}:{host.HidInformationRead}:{host.ReportMapRead}:{host.ProtocolModeWritten}"));
             if (signature == _lastPublished) { return; }
-            _lastPublished = signature; StatusChanged?.Invoke(status);
+            _lastPublished = signature;
+            if (status.ControlReady != _wasReady) { log.Write(status.ControlReady ? "reconnect" : "disconnect", $"keyboard={status.KeyboardConnected}; mouse={status.MouseConnected}; same provider retained; capture must be enabled manually"); _wasReady = status.ControlReady; }
+            StatusChanged?.Invoke(status);
         }
         catch (Exception error) { log.Error("status-error", error); }
     }
@@ -175,6 +175,7 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
         log.Write("gatt", "Composite HID; keyboard ID=1 bytes=8; mouse ID=2 bytes=6; encrypted; system CCCD; no payload ID prefix; Protocol Mode report=1/boot=0; standard boot reports supported");
         // Publish BAS in the same OS GATT database without a second discoverable service advertisement.
         _batteryProvider.StartAdvertising(new GattServiceProviderAdvertisingParameters { IsConnectable = true, IsDiscoverable = false });
+        log.Write("advertising", "StartAdvertising HID; connectable=true; discoverable=true; single HOGP announcement; system name");
         _provider.StartAdvertising(new GattServiceProviderAdvertisingParameters { IsConnectable = true, IsDiscoverable = true });
         if (_provider.AdvertisementStatus == GattServiceProviderAdvertisementStatus.Started) { _started.TrySetResult(); }
         await _started.Task.WaitAsync(TimeSpan.FromSeconds(15), token);
@@ -186,12 +187,23 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
         Publish();
     }
 
-    private void OnRadio(Radio radio, object args) { log.Write("radio", $"State={radio.State}"); SetNeutralPending(); Publish(); }
+    private void OnRadio(Radio radio, object args)
+    {
+        log.Write("radio", $"State={radio.State}; provider retained"); SetNeutralPending();
+        EnsureAdvertising("radio state changed");
+        Publish();
+    }
+    private void EnsureAdvertising(string reason)
+    {
+        if (_radio?.State != RadioState.On || Volatile.Read(ref _stopping) != 0 || _provider is null || _provider.AdvertisementStatus == GattServiceProviderAdvertisementStatus.Started || Interlocked.Exchange(ref _resumeAdvertisingPending, 1) != 0) { return; }
+        try { log.Write("advertising", $"StartAdvertising reason={reason}; same provider; one request, no retry loop"); _provider.StartAdvertising(new GattServiceProviderAdvertisingParameters { IsConnectable = true, IsDiscoverable = true }); }
+        catch (Exception error) { log.Error("advertising-resume-error", error); }
+    }
 
     private void OnAdvertising(GattServiceProvider sender, GattServiceProviderAdvertisementStatusChangedEventArgs args)
     {
         log.Write("advertising", $"AdvertisingStatus={args.Status}; Error={args.Error}");
-        if (args.Status == GattServiceProviderAdvertisementStatus.Started) { _started.TrySetResult(); }
+        if (args.Status == GattServiceProviderAdvertisementStatus.Started) { _started.TrySetResult(); Interlocked.Exchange(ref _resumeAdvertisingPending, 0); }
         Publish();
         // Report transient Aborted exactly as observed; don't assume it is benign or final.
     }
@@ -395,6 +407,7 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
             if (_hosts.TryGetValue(id, out Host? host))
             { log.Write("link", $"{host.Alias} GattSession={args.Status}; Error={args.Error}"); }
             SetNeutralPending();
+            if (args.Status == GattSessionStatus.Closed) { EnsureAdvertising("GATT disconnect"); }
             Publish();
         }
         catch (Exception error) { log.Error("session-error", error); }
@@ -407,6 +420,7 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
             if (_hosts.TryGetValue(sender.DeviceId, out Host? host))
             { log.Write("link", $"{host.Alias} BluetoothConnectionStatus={sender.ConnectionStatus}; Bonded={sender.DeviceInformation.Pairing.IsPaired}"); }
             SetNeutralPending();
+            if (sender.ConnectionStatus == BluetoothConnectionStatus.Disconnected) { EnsureAdvertising("host disconnect"); }
             Publish();
         }
         catch (Exception error) { log.Error("link-error", error); }
@@ -573,6 +587,7 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
     {
         if (Interlocked.Exchange(ref _stopping, 1) != 0) { return; }
         _monitorStop.Cancel();
+        log.Write("cleanup", "StopAdvertising reason=application exit or explicit recovery; no pairing-timeout cleanup");
         if (_monitor is not null)
         {
             try { await _monitor.WaitAsync(TimeSpan.FromSeconds(4)); }
@@ -580,6 +595,10 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
         }
         if (_keyboard is not null || _mouse is not null) { SetNeutralPending(); }
         await ReleaseAsync();
+        // Both services share Windows advertising infrastructure. Request companion BAS
+        // stop first; do not assume StopAdvertising confirms the native state immediately.
+        if (_batteryProvider is not null)
+        { try { _batteryProvider.StopAdvertising(); log.Write("cleanup", "StopAdvertising BAS before HID"); } catch (Exception error) { CanRecreateAfterStop = false; log.Error("stop-battery", error); } }
         if (_provider is not null)
         {
             try
@@ -587,12 +606,13 @@ public sealed class HogpPeripheral(BluetoothControlLog log) : IReportTransport, 
                 _provider.StopAdvertising();
                 for (int attempt = 0; attempt < 20 && _provider.AdvertisementStatus == GattServiceProviderAdvertisementStatus.Started; attempt++)
                 { await Task.Delay(100); }
-                log.Write("cleanup", $"StopAdvertising requested; observed AdvertisingStatus={_provider.AdvertisementStatus}; process exit releases local registration");
+                var status = _provider.AdvertisementStatus;
+                CanRecreateAfterStop &= !status.ToString().StartsWith("Started", StringComparison.Ordinal);
+                if (_batteryProvider is not null) { CanRecreateAfterStop &= !_batteryProvider.AdvertisementStatus.ToString().StartsWith("Started", StringComparison.Ordinal); }
+                log.Write("cleanup", $"StopAdvertising requested; observed AdvertisingStatus={status}; safe in-process recreation={CanRecreateAfterStop}; process exit releases local registration");
             }
-            catch (Exception error) { log.Error("stop-advertising", error); }
+            catch (Exception error) { CanRecreateAfterStop = false; log.Error("stop-advertising", error); }
         }
-        if (_batteryProvider is not null)
-        { try { _batteryProvider.StopAdvertising(); } catch (Exception error) { log.Error("stop-battery", error); } }
         foreach (Action unhook in _unhooks)
         {
             try { unhook(); } catch (Exception error) { log.Error("unhook", error); }

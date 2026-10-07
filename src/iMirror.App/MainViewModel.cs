@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Windows;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using iMirror.Core.Diagnostics;
@@ -16,6 +17,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private readonly IDiagnosticLog _log;
     private readonly Dispatcher _dispatcher;
     private readonly ObservableCollection<LogEntry> _entries = [];
+    private readonly ObservableCollection<LogEntry> _allEntries = [];
     private bool _isFullscreen;
     private bool _disposed;
     private readonly IAirPlayReceiver _receiver;
@@ -52,26 +54,24 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             _capture = new InputCapture(bluetooth, controlLog);
             _capture.Stopped += OnCaptureStopped;
+            _capture.PanelRequested += OnPanelRequested;
             SystemEvents.PowerModeChanged += OnPowerMode;
         }
         LogFilePath = logFilePath;
         Logs = new ReadOnlyObservableCollection<LogEntry>(_entries);
+        AllLogs = new ReadOnlyObservableCollection<LogEntry>(_allEntries);
         _log.EntryAdded += OnEntryAdded;
         foreach (var entry in _log.Snapshot()) { Append(entry); }
         AirPlayCommand = new AsyncRelayCommand(async () =>
         {
-            if (_receiver.IsRunning) { await StopControlAsync(); await Task.Run(_bluetooth.DisconnectAsync); _bluetoothStarted = false; await _receiver.StopAsync(); }
+            if (_receiver.IsRunning) { await StopControlAsync(); await _receiver.StopAsync(); }
             else { await _receiver.StartAsync(_shutdown.Token); }
         }, ex => { _log.Write(LogLevel.Error, "AirPlay", ex.ToString()); Notice = "Não foi possível alterar AirPlay. Consulte os logs."; }, dispatcher);
         BluetoothCommand = new AsyncRelayCommand(async () =>
         {
             await StopControlAsync();
-            if (_bluetoothStarted) { await Task.Run(_bluetooth.DisconnectAsync); _bluetoothStarted = false; }
-            else
-            {
-                await Task.Run(() => _bluetooth.ConnectAsync(_shutdown.Token));
-                _bluetoothStarted = _bluetooth.Status.State is not (BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.Stopped);
-            }
+            await Task.Run(() => _bluetooth.ConnectAsync(_shutdown.Token));
+            _bluetoothStarted = _bluetooth.Status.State is not (BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.Stopped);
             Notice = _bluetooth.Status.Message;
             RefreshControl();
         }, BluetoothError, dispatcher);
@@ -84,6 +84,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 await _capture.StartAsync(_ownedPid, () => (_receiver.Status.Width ?? 0, _receiver.Status.Height ?? 0), CaptureKeyboard && Bluetooth.KeyboardConnected, WheelIntensity, CursorSpeed, KeyboardLayoutMode);
                 RefreshControl();
             }
+        }, BluetoothError, dispatcher);
+        RestartHidCommand = new AsyncRelayCommand(async () =>
+        {
+            if (MessageBox.Show("Use apenas para recuperar falhas de pareamento. Reiniciar o serviço HID agora?\nSe o Windows não confirmar a parada, será necessário fechar e reabrir o iMirror para evitar outro provider ativo.", "iMirror — recuperação HID", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) { return; }
+            await StopControlAsync();
+            await Task.Run(() => _bluetooth.RestartAsync(_shutdown.Token));
+            _bluetoothStarted = _bluetooth.Status.State is not (BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.Stopped);
+            RefreshControl();
         }, BluetoothError, dispatcher);
         FullscreenCommand = new RelayCommand(ToggleFullscreen);
         InitializePresentation();
@@ -99,7 +107,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     }
     private async Task ChangeHostAsync(string id)
     { try { await StopControlAsync(); await Task.Run(() => _bluetooth.SelectHostAsync(id)); } catch (Exception error) { BluetoothError(error); } }
-    public string BluetoothButtonText => Bluetooth.State == BluetoothState.Starting ? "Conectando..." : _bluetoothStarted ? "Desconectar Bluetooth" : "Conectar Bluetooth";
+    public string BluetoothButtonText => Bluetooth.State == BluetoothState.Starting ? "HID inicializando..." : "Conectar Bluetooth";
     public string HidStatus => $"Keyboard: {(Bluetooth.KeyboardConnected ? "conectado" : "aguardando")}  |  Mouse: {(Bluetooth.MouseConnected ? "conectado" : "aguardando")}  |  {(Bluetooth.ProtocolMode == 1 ? "Report mode" : "Boot mode: sem wheel")}";
     public string HostDiagnostics => SelectedHost is { } host ? $"HID Information: {host.HidInformationRead}; Report Map: {host.ReportMapRead}; Protocol Mode escrito: {host.ProtocolModeWritten}; Bond: {host.Bonded}; Link: {host.ConnectionStatus}" : "Nenhum host HID nesta sessão. O nome anunciado é o nome Bluetooth deste PC.";
     public bool ControlActive => _capture?.IsActive == true;
@@ -131,9 +139,11 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private static string Format(TimeSpan? value) => value is { } time ? $"{time.TotalMilliseconds:F0} ms" : "N/A";
     public string LogFilePath { get; }
     public ReadOnlyObservableCollection<LogEntry> Logs { get; }
+    public ReadOnlyObservableCollection<LogEntry> AllLogs { get; }
     public AsyncRelayCommand AirPlayCommand { get; }
     public AsyncRelayCommand BluetoothCommand { get; }
     public AsyncRelayCommand ControlCommand { get; }
+    public AsyncRelayCommand RestartHidCommand { get; }
     public RelayCommand FullscreenCommand { get; }
     public bool IsFullscreen => _isFullscreen;
     public string FullscreenButtonText => _isFullscreen ? "Sair do Fullscreen" : "Fullscreen";
@@ -173,6 +183,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         await _shutdown.CancelAsync();
         await StopControlAsync();
         await BluetoothCommand.ExecutionTask;
+        await RestartHidCommand.ExecutionTask;
         await ControlCommand.ExecutionTask;
         // An activation may have been awaiting native startup when close was requested.
         await StopControlAsync();
@@ -193,11 +204,12 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
             Bluetooth = status;
             if (status.State == BluetoothState.Starting) { _appearanceIndex = 0; OnPropertyChanged(nameof(AppearanceIndex)); }
             _selectedHost = status.Hosts.FirstOrDefault(host => host.Id == status.SelectedHostId);
-            foreach (var name in new[] { nameof(Bluetooth), nameof(Hosts), nameof(SelectedHost), nameof(HidStatus), nameof(HostDiagnostics) }) { OnPropertyChanged(name); }
+            foreach (var name in new[] { nameof(Bluetooth), nameof(Hosts), nameof(SelectedHost), nameof(HidStatus), nameof(HostDiagnostics), nameof(PairingSteps), nameof(PairingGuidance) }) { OnPropertyChanged(name); }
             RefreshControl();
         });
     }
     private void OnCaptureStopped(string reason) => Dispatch(() => { Notice = $"Controle parado: {reason}. Input devolvido ao Windows."; RefreshControl(); });
+    private void OnPanelRequested() => Dispatch(() => PanelRequested?.Invoke());
     private void RefreshControl()
     { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanChangeAppearance), nameof(BluetoothSummary), nameof(ControlSummary) }) { OnPropertyChanged(name); } }
     private void Dispatch(Action action)
@@ -223,7 +235,9 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private void Append(LogEntry entry)
     {
-        _entries.Add(entry);
+        _allEntries.Add(entry);
+        while (_allEntries.Count > FileDiagnosticLog.HistoryCapacity) { _allEntries.RemoveAt(0); }
+        if (!DiagnosticVisibility.IsVerbose(entry)) { _entries.Add(entry); }
         while (_entries.Count > FileDiagnosticLog.HistoryCapacity) { _entries.RemoveAt(0); }
     }
 
@@ -238,6 +252,6 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         _receiver.StatusChanged -= OnAirPlayStatus;
         _bluetooth.StatusChanged -= OnBluetoothStatus;
         _capture?.RequestStop("ViewModel encerrado");
-        if (_capture is not null) { _capture.Stopped -= OnCaptureStopped; SystemEvents.PowerModeChanged -= OnPowerMode; }
+        if (_capture is not null) { _capture.Stopped -= OnCaptureStopped; _capture.PanelRequested -= OnPanelRequested; SystemEvents.PowerModeChanged -= OnPowerMode; }
     }
 }

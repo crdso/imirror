@@ -45,6 +45,8 @@ internal static class Program
             Test("Rotação limita tamanho, sessões e preserva logs alheios", () => CheckRotation(args[0]));
             Test("Janela, bindings e botões informam disponibilidade real", () => CheckWindow(args[0]));
             Test("Páginas responsivas, diagnóstico retrátil e filtros", () => CheckPresentation(args[0]));
+            Test("Geometria, DPI, debounce, focus e ICO multi-resolução", () => FinalPolishProbe.CheckGeometryAndBranding());
+            Test("Renderer nativo: HWND próprio, ícone, aspect e recuperação do painel", () => FinalPolishProbe.CheckRenderer(args[0]));
             Test("UI BLE exige subscriber, restringe ativação e reflete desconexão", () => CheckBluetoothUi(args[0]));
             Test("Botão AirPlay diagnostica a instalação real sem bloquear a UI", () => CheckAirPlayButton(args[0]));
             Test("Executável abre e encerra sem erro", () => CheckExecutable(args));
@@ -135,7 +137,7 @@ internal static class Program
             TextElement.SetFontFamily(content,responsiveWindow.FontFamily); TextElement.SetFontSize(content,responsiveWindow.FontSize);
             TextElement.SetForeground(content,responsiveWindow.Foreground);
             responsiveWindow.Content=null; // Never attach this visual to an HWND.
-            foreach (var size in new[] { (1366,768), (1920,1080), (2560,1440) })
+            foreach (var size in new[] { (820,520), (960,600), (1366,768), (1920,1080), (2560,1440) })
             {
                 // Detach the visual from the monitor-capped HWND so no native layout clip
                 // hides the right side of a viewport larger than this notebook's display.
@@ -163,6 +165,11 @@ internal static class Program
             model.ClearLogsCommand.Execute(null);
             using var reader = new StreamReader(new FileStream(log.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
             Assert(model.Logs.Count==0 && reader.ReadToEnd().Contains("test error"), "Clear deleted persisted evidence.");
+            log.Write(LogLevel.Information,"AirPlay","Streaming");
+            for (int i=0;i<600;i++) { log.Write(LogLevel.Information,"UxPlay stdout","feedback: Guessing PTS"); }
+            Pump(); Assert(model.Logs.Any(entry=>entry.Message=="Streaming") && model.AllLogs.Count==500,"Verbose traffic erased relevant UI events or exceeded bounds.");
+            model.LogFilter="Verbose"; Assert(model.LogView.Cast<LogEntry>().Any(entry=>entry.Message.Contains("Guessing PTS")),"Verbose filter hides native detail.");
+            model.LogFilter="Todos"; Assert(!model.LogView.Cast<LogEntry>().Any(entry=>entry.Message.Contains("Guessing PTS")),"Normal filter floods native detail.");
             model.CloseDiagnosticsCommand.Execute(null); Pump(); Assert(!((FrameworkElement)window.FindName("DiagnosticsPanel")).IsVisible,"Diagnostics does not close.");
         }
         finally { window.Close(); Pump(); }
@@ -298,7 +305,10 @@ internal static class Program
             Assert(!control.IsEnabled && !model.CanControl,"Control allowed without mouse subscriber.");
             model.BluetoothCommand.Execute(null);
             while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
-            Pump(); Assert(!model.Bluetooth.IsConnected && model.BluetoothButtonText.Contains("Desconectar"),"Advertising mistaken for HID success.");
+            Pump(); Assert(!model.Bluetooth.IsConnected && model.BluetoothButtonText == "Conectar Bluetooth","Advertising mistaken for HID success.");
+            model.BluetoothCommand.Execute(null);
+            while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+            Assert(bluetooth.Connects == 2 && bluetooth.Disconnects == 0,"Repeated pairing must not disconnect HOGP.");
             bluetooth.Publish(true,false); Pump();
             Assert(!model.CanControl && model.Bluetooth.KeyboardConnected && !model.Bluetooth.MouseConnected,"Keyboard-only status incorrect.");
             bluetooth.Publish(true,true); Pump();
@@ -308,6 +318,10 @@ internal static class Program
             model.ControlCommand.Execute(null);
             while(!model.ControlCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
             Pump(); Assert(!model.ControlActive && model.Notice.Contains("janela de vídeo"),"Capture accepted a foreign/missing HWND.");
+            model.ReleaseControl(); Assert(bluetooth.Disconnects == 0,"Stop capture destroyed HOGP.");
+            model.AirPlayCommand.Execute(null);
+            while(!model.AirPlayCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+            Assert(!receiver.IsRunning && bluetooth.Disconnects == 0 && model.Bluetooth.MouseConnected,"Stop AirPlay destroyed HOGP.");
             bluetooth.Publish(false,false); Pump();
             Assert(!model.CanControl && !control.IsEnabled && !model.Bluetooth.IsConnected,"Disconnected input remains enabled.");
         }
@@ -320,7 +334,7 @@ internal static class Program
     private sealed class FakeBluetooth : IBluetoothController
     {
         public BluetoothStatus Status { get; private set; } = BluetoothStatus.Stopped;
-        public int Disconnects;
+        public int Disconnects, Connects;
         public event Action<BluetoothStatus>? StatusChanged;
         public void Publish(bool keyboard,bool mouse)
         {
@@ -328,7 +342,7 @@ internal static class Program
                 [new("fake","H1","Test host",true,"test",keyboard,mouse,true,true,true)],"fake",keyboard,mouse);
             StatusChanged?.Invoke(Status);
         }
-        public Task ConnectAsync(CancellationToken token=default) { Status=new(BluetoothState.WaitingForPairing,"Aguardando pareamento",[]); StatusChanged?.Invoke(Status); return Task.CompletedTask; }
+        public Task ConnectAsync(CancellationToken token=default) { Connects++; Status=new(BluetoothState.WaitingForPairing,"Aguardando pareamento",[]); StatusChanged?.Invoke(Status); return Task.CompletedTask; }
         public Task DisconnectAsync() { Disconnects++; Publish(false,false); return Task.CompletedTask; }
         public Task SelectHostAsync(string id)=>Task.CompletedTask;
         public Task SetAppearanceAsync(ushort? appearance)=>Task.CompletedTask;
@@ -379,11 +393,11 @@ internal static class Program
     private sealed class MissingReceiver : IAirPlayReceiver
     {
         public AirPlayStatus Status { get; private set; } = new();
-        public bool IsRunning => false;
+        public bool IsRunning => Status.State == AirPlayState.Streaming;
         public event Action<AirPlayStatus>? StatusChanged;
         public Task StartAsync(CancellationToken cancellationToken = default)
         { Status = new(AirPlayState.Error, "UxPlay não encontrado", AirPlayError.Dependencies); StatusChanged?.Invoke(Status); return Task.CompletedTask; }
-        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken = default) { Status = new(); StatusChanged?.Invoke(Status); return Task.CompletedTask; }
         public void Stream() { Status = new(AirPlayState.Streaming,"test",Width:998,Height:2160); StatusChanged?.Invoke(Status); }
     }
 

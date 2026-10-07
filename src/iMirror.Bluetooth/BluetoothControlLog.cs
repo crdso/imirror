@@ -10,6 +10,9 @@ public sealed class BluetoothControlLog : IDisposable
     private readonly BoundedLogFile _writer;
     private readonly bool _echo;
     private bool _closed;
+    private readonly string _session = Guid.NewGuid().ToString("N")[..8];
+    private int _providerGeneration;
+    public void SetProviderGeneration(int generation) => Volatile.Write(ref _providerGeneration, generation);
     public event Action<string, string>? Written;
 
     public BluetoothControlLog(string path, bool echo = false)
@@ -24,7 +27,7 @@ public sealed class BluetoothControlLog : IDisposable
         lock (_gate)
         {
             if (_closed) { return; }
-            string line = $"{DateTimeOffset.Now:O} [{category}] {message}";
+            string line = $"{DateTimeOffset.Now:O} [{category}] session={_session}; generation={Volatile.Read(ref _providerGeneration)}; {message}";
             _writer.WriteLine(line);
             if (_echo) { Console.WriteLine(line); }
             Written?.Invoke(category, message);

@@ -34,6 +34,9 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
     public bool IsActive => Volatile.Read(ref _active) != 0;
     public bool KeyboardActive => IsActive && _keyboard;
     public event Action<string>? Stopped;
+    public event Action? PanelRequested;
+    private volatile bool _panelRecoveryEnabled, _panelRecoveryRequiresShift;
+    public void SetPanelRecoveryHotkey(bool enabled, bool requireShift) { _panelRecoveryEnabled = enabled; _panelRecoveryRequiresShift = requireShift; }
     public Task Completion => _finished;
     public string CursorDiagnostic
     { get { Native.GetCursorPos(out var point); var root=Native.GetAncestor(Native.WindowFromPoint(point),2);
@@ -211,6 +214,9 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
             // Captured modifier events may be swallowed before Windows updates its async state.
             bool ctrl = (_keys.Modifiers & 0x11) != 0 || Native.GetAsyncKeyState(0x11) < 0;
             bool alt = (_keys.Modifiers & 0x44) != 0 || Native.GetAsyncKeyState(0x12) < 0;
+            bool shift = (_keys.Modifiers & 0x22) != 0 || Native.GetAsyncKeyState(0x10) < 0;
+            if (down && CapturePolicy.PanelRecovery(vk, ctrl, alt, shift, _panelRecoveryEnabled, _panelRecoveryRequiresShift))
+            { RequestStop("mostrar painel iMirror"); PanelRequested?.Invoke(); return 1; }
             if (down && CapturePolicy.Emergency(vk, ctrl, alt))
             { RequestStop("atalho de emergência"); return 1; }
             if (!Allowed(false)) { RequestStop("foco ou teclado HID perdido"); return Next(); }

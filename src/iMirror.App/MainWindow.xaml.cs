@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using iMirror.App.Presentation;
 
 namespace iMirror.App;
 
@@ -19,6 +20,7 @@ public partial class MainWindow : Window
     private bool _closingRequested;
     private int _previousPage;
     private IInputElement? _beforeDiagnosticsFocus;
+    private WindowPresentation? _presentation;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -38,9 +40,17 @@ public partial class MainWindow : Window
         ((INotifyCollectionChanged)viewModel.Logs).CollectionChanged += OnLogsChanged;
         PreviewKeyDown += OnPreviewKeyDown;
         Closing += OnClosing;
+        SourceInitialized += (_, _) =>
+        {
+            // Automated offscreen windows opt out of tray/hotkeys and user preferences.
+            if (!ShowInTaskbar) { return; }
+            try { _presentation = new WindowPresentation(this, viewModel); }
+            catch (Exception error) { viewModel.FocusMode = false; viewModel.LogPresentation("Window setup failed: " + error.Message); viewModel.PresentationNotice("Não foi possível configurar modo foco. O painel permanece visível."); }
+        };
         Closed += (_, _) =>
         {
             _closed = true;
+            _presentation?.Dispose();
             viewModel.PropertyChanged -= OnViewModelChanged;
             ((INotifyCollectionChanged)viewModel.Logs).CollectionChanged -= OnLogsChanged;
         };
@@ -52,6 +62,7 @@ public partial class MainWindow : Window
         args.Cancel = true;
         if (_closingRequested) { return; }
         _closingRequested = true;
+        try { _presentation?.SavePreferences(); } catch (Exception error) { _viewModel.LogPresentation("Window preferences not saved: " + error.Message); }
         IsEnabled = false;
         try { await _viewModel.ShutdownAsync(); }
         catch (Exception ex)
@@ -60,7 +71,12 @@ public partial class MainWindow : Window
             IsEnabled = true;
             _closingRequested = false;
             _viewModel.ReportShutdownFailure(ex);
-            MessageBox.Show("Não foi possível encerrar o receiver. Tente Parar AirPlay antes de fechar e consulte os logs.", "iMirror", MessageBoxButton.OK, MessageBoxImage.Error);
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                // Show only after Closing has returned; WPF rejects Show while a close is pending.
+                _presentation?.ShowPanel();
+                MessageBox.Show("Não foi possível encerrar o receiver. Tente Parar AirPlay antes de fechar e consulte os logs.", "iMirror", MessageBoxButton.OK, MessageBoxImage.Error);
+            }));
             return;
         }
         _shutdownComplete = true;

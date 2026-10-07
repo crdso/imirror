@@ -87,6 +87,7 @@ public sealed class WheelAccumulator
 
 public static class CapturePolicy
 {
+    public static bool PanelRecovery(int key, bool ctrl, bool alt, bool shift, bool enabled, bool requireShift) => enabled && key == 0x49 && ctrl && alt && shift == requireShift;
     public static bool CanSend(bool active, bool ownForeground, bool insideViewport, bool subscribed) => active && ownForeground && insideViewport && subscribed;
     public static bool Emergency(int key, bool ctrl, bool alt) => key == 0x1B || key == 0x51 && ctrl && alt;
 }

@@ -1,6 +1,6 @@
 # Investigação da conexão Bluetooth — 2026-10-07
 
-**Estado: PENDING LIVE IPHONE CONNECTION DIAGNOSIS.** A conexão física relatada nesta sessão ainda não foi reproduzida com os novos observadores. As validações físicas anteriores de transporte/input são históricas; não comprovam a reconexão atual.
+**Estado: PENDING LIVE IPHONE CONNECTION DIAGNOSIS.** A conexão HID desta sessão não foi validada e a causa da falha permanece sem confirmação. As validações físicas anteriores de transporte/input são históricas; não comprovam a reconexão atual.
 
 ## Evidência e limites
 
@@ -32,7 +32,7 @@ Provider, Report Map, proteção criptografada, ports, renderer e runtime AirPla
 - Smoke dos dois pacotes: execução direta, ícones SMALL/BIG/Shell e atalho, geometria e fechamento exit 0; 142 hashes nativos preservados.
 - Evidências locais ignoradas: `logs/bluetooth-followup-debug.log`, `logs/bluetooth-followup-final-debug-build.log`, `logs/bluetooth-followup-release.log`, `logs/bluetooth-native-associations-test.log`, `logs/bluetooth-followup-release-smoke.log`. Tentativa física: `logs/bluetooth-control.log`.
 
-Pacotes locais deste código:
+Histórico dos pacotes do código `6535f30` (substituídos pelo release abaixo):
 
 | Artefato | Bytes | SHA256 |
 |---|---:|---|
@@ -48,3 +48,43 @@ Manter uma única instância do iMirror em Controle, com anúncio iniciado. No i
 Reportar: apareceu nessa lista? O Windows observou link Classic ou BLE? GATT, HIDInformation, ReportMap, teclado e mouse avançaram? Apareceu segunda entrada? Não alternar rádio ou apagar todos os dispositivos durante a coleta. Se continuar sem callbacks, a investigação deve alcançar a etapa de link/segurança, sem atribuir sucesso HID ao rótulo Conectado do iPhone.
 
 Referências: [Windows GATT server](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-server), [DeviceWatcher/cliente BLE](https://learn.microsoft.com/en-us/windows/apps/develop/devices-sensors/gatt-client), [windows-ble-hid](https://github.com/abhishek-raj/windows-ble-hid). O upstream não comprova reconexão iOS após reinício do app; não se extrapolam workarounds de cache Android para iOS.
+
+## Atualização: desconexão espontânea e diagnóstico do controlador
+
+O usuário relatou desconexão rápida após o iPhone mostrar Conectado, com duas entradas do PC; a imagem mostrou nenhuma etapa GATT/HID. Na sessão das 13:55, o provider permaneceu na geração 1, sem mudança de rádio/advertising, e nenhuma leitura chegou ao app. O encerramento às 14:05 foi do aplicativo completo, com cleanup; não foi um timeout automático de pareamento. O usuário informou que a tentativa pelo AssistiveTouch também não conectou ou não encontrou o PC; distinguir esses dois resultados ainda exige resposta.
+
+A comparação de `HogpPeripheral` com o checkpoint anterior ao polimento não mostrou mudança do esquema/criptografia/publicação inicial. Não foi encontrada causa comprovada que justifique alterar transporte ou segurança. Ausência de callbacks permanece insuficiente para atribuir o problema ao iOS, driver, cache ou entrada Classic.
+
+Foi acrescentado um diagnóstico separado, sem integração/admin obrigatório no startup WPF:
+
+- `Diagnosticar-Bluetooth.cmd`: um clique abre o EXE Release em Controle/Bluetooth se não houver iMirror em execução, solicita UAC e inicia uma coleta de 90 segundos em segundo plano. O iMirror é aberto pelo token original, antes da elevação do coletor; permanece aberto/anunciando. O script não reinicia uma instância existente nem envia input.
+- `tools/open-bluetooth-link-trace.ps1`: launcher com elevação fornecida pelo Windows; não trata credenciais. `-ShowConsole` é opcional.
+- `tools/trace-bluetooth-link.ps1`: duração limitada a 180 segundos; mutex impede coletas concorrentes; heartbeat; cleanup normal em finally. Log em `logs/bluetooth-link-trace.log`.
+- `tools/BluetoothLinkTrace.cs`: consumidor ETW x64 em tempo real, sem ETL. Permite somente campos numéricos de ConnectionComplete Classic/LE, AuthenticationComplete, EncryptionChange/KeyRefresh, SimplePairingComplete e DisconnectionComplete. Aliases L1/L2 identificam handles locais desta coleta; não identificam automaticamente o iPhone.
+
+As 12 fixtures sem hardware do decodificador também foram incluídas em `tools/test.ps1`; não exigem administrador, advertising ou input.
+
+Nenhum endereço, nome remoto, chave, SMP, conteúdo ATT ou payload HID é persistido. Comandos/pacotes de dados são descartados antes de cópia; os prefixes de eventos permitidos são transitórios em memória e limpos após decodificação. Eventos abrangem todo o rádio; timestamps precisam coincidir com a tentativa física. Ausência de eventos em coleta interrompida não comprova ausência de conexão.
+
+Validação: 12 fixtures passaram no PowerShell 7 e Windows PowerShell 5.1, incluindo conexão LE aprimorada, motivo de timeout, rejeição de chave/entrada truncada. Uma coleta nativa de dois segundos iniciou/encerrou com Win32=0, zero perdas, zero erros de parse; observou um pacote de dados descartado, sem nova conexão física nesse intervalo. A coleta seguinte de três minutos foi interrompida sem registrar STOP/SUMMARY; não há conclusão de controlador para aquela tentativa. O launcher do modo oculto/recovery retornou falha de elevação; essa validação não foi aprovada. Debug e Release completos passaram 59/59, 0 errors/warnings; evidências em `logs/bluetooth-disconnect-debug.log` e `logs/bluetooth-disconnect-release.log`. O primeiro restore Debug no sandbox falhou na consulta de vulnerabilidades NuGet; a execução com acesso à fonte oficial passou, sem desabilitar auditoria.
+
+Se o processo da coleta for encerrado à força, finally não é garantido. O log START identifica sua sessão; para encerrar somente ela, use `tools/open-bluetooth-link-trace.ps1 -StopSession <nome exato do START>`. O parâmetro aceita exclusivamente `iMirror.Bluetooth.Status.<32 caracteres hexadecimais>`. Não pare outras sessões ETW. O logger não configura arquivo/persistência nem modifica rádio, serviços, bonds, driver ou rede. A ferramenta administrativa é independente do WPF; o retorno visual e os novos pacotes estão descritos abaixo.
+
+O coletor salva somente nome/timestamp da sua sessão em `logs/bluetooth-link-active.json`. Na execução seguinte elevada, recupera esse logger exato antes de criar outro; o mutex impede interromper um coletor vivo. O estado só é removido após parada confirmada. A sessão interrompida desta investigação foi identificada nesse estado local; sua parada direta recebeu Access Denied e a recuperação ainda exige UAC. O botão único permite realizar recuperação e nova coleta na mesma elevação. Não foi declarada coleta física concluída nem correção da conexão.
+
+## Correção do retorno visual e release desta atualização
+
+Código do pacote: `bce88de`. O título de Controle agora mostra **Sem resposta HID após 30 s · anúncio mantido** em vez de manter Aguardando iPhone indefinidamente. A orientação aparece acima das etapas, dentro da área inicialmente visível. Foi removida a afirmação de que AssistiveTouch seria necessário apenas para exibir o ponteiro; a orientação usa o caminho Apple de dispositivos Bluetooth apontadores. Nenhum estado GATT/subscriber é inferido.
+
+`HogpPeripheral.Publish` registra `pairing-timeout` uma vez por expiração da janela visual, com advertising/GATT/keyboard/mouse observados. Não chama StopAdvertising/Dispose nem transforma ausência de callbacks em desconexão. A correção envolve `MainViewModel.Presentation.cs`, `Views/ControlView.xaml`, `HogpPeripheral.cs` e a verificação WPF em Phase1/Program.cs.
+
+Debug/Release: 59/59 grupos mais 12 fixtures do controlador, 0 warnings/0 errors. Probe isolado 11/11, fixtures de rede 6/6. Cursor/renderer nativo com HID fake: PASS. Nova captura da página Controle foi inspecionada; ela usa estado simulado e não comprova conexão física. Evidências: `logs/bluetooth-disconnect-debug.log`, `logs/bluetooth-disconnect-release.log`, `logs/bluetooth-disconnect-ui-release.log` e `.cache/validation/20261007-142838-336/bluetooth-timeout-feedback.png`. Smoke dos dois EXEs/ZIP: PASS, fechamento exit 0, ícones/WorkArea/142 hashes nativos preservados (`logs/bluetooth-disconnect-release-smoke.log`).
+
+| Pacote atual | Bytes | SHA256 |
+|---|---:|---|
+| dist/iMirror/iMirror.exe | 27.362.528 | `D46929A898E751C842737A3EBF47116CE482F079255FD1D6ACD7D1F7990957C3` |
+| dist/iMirror-Portable.zip | 151.810.174 | `AD430034C9952ED1C3F8907CC545B22D4A334FA0164E3B8EB541976BC327C892` |
+
+FDD completo: 211.398.655 bytes; self-contained descompactado: 383.736.479 bytes. Os pacotes contêm o retorno visual atualizado; a ferramenta administrativa separada fica na raiz/tools do projeto. Logs, screenshots, estado da coleta e binários continuam ignorados no Git. O usuário precisa autorizar o UAC para obter a próxima coleta; **PENDING LIVE IPHONE CONNECTION DIAGNOSIS** permanece.
+
+Referências técnicas: [OpenTrace/EventRecordCallback](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-event_trace_logfilew), manifesto do provedor instalado `Microsoft-Windows-BTH-BTHPORT`, e [consumidor BIP/H4 do Wireshark](https://raw.githubusercontent.com/wireshark/wireshark/master/extcap/etl.c). Nenhum código de captura/dump do Wireshark foi incorporado.

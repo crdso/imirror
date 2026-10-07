@@ -70,6 +70,8 @@ O filtro normal preserva eventos relevantes; **Verbose** mostra detalhes nativos
 
 **Reconexão Bluetooth em investigação:** a página Controle agora mostra vínculos Classic/BLE conhecidos pelo Windows separadamente das etapas HID. Um dispositivo marcado conectado no sistema não habilita controle sem subscriptions. Veja [evidências e próximo teste físico](docs/BLUETOOTH_CONNECTION_INVESTIGATION.md); a tentativa atual ainda não está aprovada.
 
+Após 30 segundos sem resposta, Controle exibe o timeout no topo e mantém o anúncio. Para diagnóstico do controlador, `Diagnosticar-Bluetooth.cmd` abre Controle se necessário e solicita UAC para uma coleta de 90 segundos em segundo plano, sem salvar pacotes/chaves/teclas. O resultado fica em `logs/bluetooth-link-trace.log`; não altera rádio, bonds ou rede.
+
 SDK .NET **10.0.401** conforme global.json; Git; Windows. Restore só usa pacotes Microsoft da fonte oficial configurada. O SDK local é mantido em .tools/dotnet. O runtime nativo local foi reduzido; **recompilar WPF não exige MSYS2 completo**.
 
 ~~~powershell

@@ -34,6 +34,10 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _bluetoothStarted;
     private CancellationTokenSource? _bluetoothStart;
     private bool _bluetoothStopping;
+    private bool _pairingVisible;
+    private DateTimeOffset? _visualPairingStarted;
+    private readonly DispatcherTimer _pairingTimer;
+    private readonly Func<string, bool> _confirmRecovery;
     private readonly CancellationTokenSource _shutdown = new();
     private string _notice = "Inicie AirPlay e selecione iMirror - Windows no Espelhamento de Tela do iPhone.";
 
@@ -42,10 +46,14 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         : this(log, airPlay, new UnavailableBluetoothController(bluetooth), dispatcher, logFilePath) { }
 
     public MainViewModel(IDiagnosticLog log, IAirPlayReceiver airPlay, IBluetoothController bluetooth,
-        Dispatcher dispatcher, string logFilePath, BluetoothControlLog? controlLog = null, Func<int>? ownedPid = null)
+        Dispatcher dispatcher, string logFilePath, BluetoothControlLog? controlLog = null, Func<int>? ownedPid = null,
+        Func<string, bool>? confirmRecovery = null)
     {
         _log = log;
         _dispatcher = dispatcher;
+        _confirmRecovery = confirmRecovery ?? (message => MessageBox.Show(message, "iMirror — recuperação HID", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
+        _pairingTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background,
+            (_, _) => { OnPropertyChanged(nameof(ProviderDiagnostics)); OnPropertyChanged(nameof(PairingGuidance)); }, dispatcher);
         AirPlay = airPlay.Status;
         _receiver = airPlay;
         _receiver.StatusChanged += OnAirPlayStatus;
@@ -72,6 +80,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         BluetoothCommand = new AsyncRelayCommand(async () =>
         {
             if (!CanConnectBluetooth) { return; }
+            _pairingVisible = true; _visualPairingStarted = DateTimeOffset.UtcNow;
             using var start = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
             _bluetoothStart = start; RefreshControl();
             try
@@ -96,7 +105,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         RestartHidCommand = new AsyncRelayCommand(async () =>
         {
             if (_bluetoothStopping) { return; }
-            if (MessageBox.Show("Use apenas para recuperar falhas de pareamento. Reiniciar o serviço HID agora?\nSe o Windows não confirmar a parada, será necessário fechar e reabrir o iMirror para evitar outro provider ativo.", "iMirror — recuperação HID", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) { return; }
+            if (!_confirmRecovery("Reiniciar serviço HID? Isso encerra o provider atual. Se a parada não for confirmada pelo Windows, feche e reabra o iMirror. Não use durante a validação estável.")) { return; }
             await StopControlAsync();
             await Task.Run(() => _bluetooth.RestartAsync(_shutdown.Token));
             _bluetoothStarted = _bluetooth.Status.State is not (BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.Stopped);
@@ -105,6 +114,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         StopBluetoothCommand = new AsyncRelayCommand(async () =>
         {
             if (!CanStopBluetooth) { return; }
+            if (!_confirmRecovery("Parar serviço HID? Use somente para recuperação avançada. Cancela anúncio e input; o provider permanece até fechar ou reiniciar explicitamente. Para apenas recolher o pareamento, use Cancelar espera.")) { return; }
             _bluetoothStopping = true; RefreshControl();
             try
             {
@@ -117,10 +127,27 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
                 await StopControlAsync();
                 await Task.Run(_bluetooth.StopAsync);
                 _bluetoothStarted = false;
+                CancelPairingVisual();
                 Notice = _bluetooth.Status.Message;
             }
             finally { _bluetoothStopping = false; RefreshControl(); }
         }, BluetoothError, dispatcher);
+        UnpairHostCommand = new AsyncRelayCommand(async () =>
+        {
+            var host = SelectedHost;
+            if (!CanUnpairHost || host is null || !_confirmRecovery($"Esquecer o vínculo de {host.DisplayName} no Windows? Apenas o host desta sessão HID será afetado. Depois esqueça o PC no iPhone uma única vez.")) { return; }
+            await StopControlAsync();
+            var result = await Task.Run(() => _bluetooth.UnpairHostAsync(host.Id, _shutdown.Token));
+            Notice = $"DeviceUnpairingResult: {result.Status}. " + (result.Success ? "Esqueça também o PC no iPhone uma única vez. Serviço HID mantido." : "O vínculo não foi removido; consulte o resultado.");
+            RefreshControl();
+        }, BluetoothError, dispatcher);
+        PairingCommand = new RelayCommand(() =>
+        {
+            if (!CanTogglePairing) { return; }
+            if (_pairingVisible) { CancelPairingVisual(); return; }
+            if (CanConnectBluetooth) { BluetoothCommand.Execute(null); }
+            else { _pairingVisible = true; _visualPairingStarted = DateTimeOffset.UtcNow; RefreshControl(); }
+        });
         FullscreenCommand = new RelayCommand(ToggleFullscreen);
         InitializePresentation();
     }
@@ -135,7 +162,16 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     }
     private async Task ChangeHostAsync(string id)
     { try { await StopControlAsync(); await Task.Run(() => _bluetooth.SelectHostAsync(id)); } catch (Exception error) { BluetoothError(error); } }
-    public string BluetoothButtonText => Bluetooth.State == BluetoothState.Starting ? "HID inicializando..." : "Conectar Bluetooth";
+    public string BluetoothButtonText => _pairingVisible ? "Cancelar espera" : _bluetoothStarted || _bluetoothStart is not null ? "Mostrar pareamento" : "Conectar Bluetooth";
+    public bool PairingVisible
+    { get => _pairingVisible; set { if (_pairingVisible == value) { return; } _pairingVisible = value; _visualPairingStarted = value ? DateTimeOffset.UtcNow : null; RefreshControl(); } }
+    public bool CanTogglePairing => !_bluetoothStopping && Bluetooth.State != BluetoothState.StopUnconfirmed && !_shutdown.IsCancellationRequested;
+    public void CancelPairingVisual()
+    { _pairingVisible = false; _visualPairingStarted = null; _controlLog?.Write("pairing-visual", "Visual wait canceled; provider, advertising, input and bond untouched"); RefreshControl(); }
+    public bool CanUnpairHost => !_bluetoothStopping && SelectedHost is { Bonded: true, CanUnpair: true };
+    public string HidSchemaProfile => "iOS Stable / Known Good";
+    public string StableKeyboardLimitation => "iOS Stable: International1 do ABNT2 (/ e ?) não é enviado. US e demais teclas/dead keys PT-BR mantidos; descriptor fixo 0x65.";
+    public string ProviderDiagnostics => $"Provider generation: {Bluetooth.ProviderGeneration}\nProvider lifetime: {(Bluetooth.ProviderCreatedAt is { } at ? (DateTimeOffset.UtcNow - at).ToString(@"hh\:mm\:ss") : "não iniciado")}\nAdvertising state: {Bluetooth.AdvertisingRecoveryState}\nHID completo live: {(Bluetooth.HidReadySince is { } healthy ? (DateTimeOffset.UtcNow - healthy).ToString(@"hh\:mm\:ss") : "aguardando etapas HID")}\nReconexão HID observada no mesmo provider: {Bluetooth.HidReconnectObserved}";
     private static bool IsBluetoothActive(BluetoothStatus status) => status.State is not
         (BluetoothState.Stopped or BluetoothState.Disconnected or BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.StopUnconfirmed);
     public bool CanConnectBluetooth => !_bluetoothStopping && !_bluetoothStarted && _bluetoothStart is null &&
@@ -146,7 +182,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         $"Keyboard: {(Bluetooth.KeyboardConnected ? "conectado" : "aguardando")}  |  Mouse: {(Bluetooth.MouseConnected ? "conectado" : "aguardando")}  |  {(Bluetooth.ProtocolMode == 1 ? "Report mode" : "Boot mode: sem wheel")}";
     public string HostDiagnostics => SelectedHost is { } host ? $"HID Information: {host.HidInformationRead}; Report Map: {host.ReportMapRead}; Protocol Mode escrito: {host.ProtocolModeWritten}; Bond: {host.Bonded}; Link: {host.ConnectionStatus}" : "Nenhum host HID nesta sessão. O nome anunciado é o nome Bluetooth deste PC.";
     public bool ControlActive => _capture?.IsActive == true;
-    public bool CanControl => !_bluetoothStopping && (ControlActive || Bluetooth.MouseConnected && AirPlay.State == AirPlayState.Streaming && AirPlay.Width > 0 && AirPlay.Height > 0);
+    public bool CanControl => !_bluetoothStopping && (ControlActive || Bluetooth.ControlReady && AirPlay.State == AirPlayState.Streaming && AirPlay.Width > 0 && AirPlay.Height > 0);
     public string ControlButtonText => ControlActive ? "Desativar controle" : "Ativar controle";
     public string ControlStatus => ControlActive ? "Controle ativo — ESC ou Ctrl+Alt+Q para parar" : "Mouse relativo — captura somente na janela de vídeo em foco";
     public bool CaptureKeyboard
@@ -178,6 +214,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public AsyncRelayCommand AirPlayCommand { get; }
     public AsyncRelayCommand BluetoothCommand { get; }
     public AsyncRelayCommand StopBluetoothCommand { get; }
+    public AsyncRelayCommand UnpairHostCommand { get; }
+    public RelayCommand PairingCommand { get; }
     public AsyncRelayCommand ControlCommand { get; }
     public AsyncRelayCommand RestartHidCommand { get; }
     public RelayCommand FullscreenCommand { get; }
@@ -220,6 +258,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         await StopControlAsync();
         await BluetoothCommand.ExecutionTask;
         await StopBluetoothCommand.ExecutionTask;
+        await UnpairHostCommand.ExecutionTask;
         await RestartHidCommand.ExecutionTask;
         await ControlCommand.ExecutionTask;
         // An activation may have been awaiting native startup when close was requested.
@@ -234,7 +273,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     { _controlLog?.Error("UI-error", error); Notice = error is InputBlockedException ? error.Message : "Erro no controle Bluetooth. Consulte bluetooth-control.log."; RefreshControl(); }
     private void OnBluetoothStatus(BluetoothStatus status)
     {
-        if (!status.MouseConnected || _capture?.KeyboardActive == true && !status.KeyboardConnected || status.SelectedHostId != Bluetooth.SelectedHostId)
+        if (!status.ControlReady || status.SelectedHostId != Bluetooth.SelectedHostId)
         { _capture?.RequestStop("host ou subscriber HID perdido"); }
         Dispatch(() =>
         {
@@ -248,13 +287,13 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private void OnCaptureStopped(string reason) => Dispatch(() => { Notice = $"Controle parado: {reason}. Input devolvido ao Windows."; RefreshControl(); });
     private void OnPanelRequested() => Dispatch(() => PanelRequested?.Invoke());
     private void RefreshControl()
-    { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanConnectBluetooth), nameof(CanStopBluetooth), nameof(CanChangeAppearance), nameof(BluetoothSummary), nameof(ControlSummary) }) { OnPropertyChanged(name); } }
+    { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanConnectBluetooth), nameof(CanStopBluetooth), nameof(CanTogglePairing), nameof(PairingVisible), nameof(CanUnpairHost), nameof(ProviderDiagnostics), nameof(PairingGuidance), nameof(CanChangeAppearance), nameof(BluetoothSummary), nameof(ControlSummary) }) { OnPropertyChanged(name); } }
     private void Dispatch(Action action)
     { if (_disposed || _dispatcher.HasShutdownStarted) { return; } if (_dispatcher.CheckAccess()) { action(); } else { _dispatcher.BeginInvoke(action); } }
     private void OnPowerMode(object sender, PowerModeChangedEventArgs args)
     {
         if (args.Mode == PowerModes.Suspend) { _capture?.RequestStop("Windows suspenso"); _controlLog?.Write("power", "Suspend: capture stopped; neutral release pending if link closed"); }
-        if (args.Mode == PowerModes.Resume) { _capture?.RequestStop("Windows retomado"); _controlLog?.Write("power", "Resume: no automatic capture; recheck HID subscribers"); Dispatch(() => Notice = "Windows retomado. Reconecte em Ajustes > Bluetooth se os subscribers não retornarem."); }
+        if (args.Mode == PowerModes.Resume) { _capture?.RequestStop("Windows retomado"); _controlLog?.Write("power", "Resume: no automatic capture; recheck HID subscribers"); Dispatch(() => Notice = "Windows retomado. Use AssistiveTouch > Dispositivos > Dispositivos Bluetooth se os subscribers não retornarem."); }
     }
 
     public void ReportShutdownFailure(Exception exception)
@@ -285,6 +324,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _pairingTimer.Stop();
         _log.EntryAdded -= OnEntryAdded;
         _receiver.StatusChanged -= OnAirPlayStatus;
         _bluetooth.StatusChanged -= OnBluetoothStatus;

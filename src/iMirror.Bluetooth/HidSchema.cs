@@ -12,18 +12,22 @@ public static class HidSchema
     public const int KeyboardLength = 8;
     public const int MouseLength = 6;
 
+    public const string Profile = "iOS-stable";
+    public const byte MaximumKeyboardUsage = 0x65;
+    public const string KnownGoodReportMapSha256 = "3097B7140EDA569B37EECC11502A31AF653B444FFEDB923E0CC85F3CCB5C0A5D";
+    public static byte[] ReportMap => (byte[])StableReportMap.Clone();
+    public static string ReportMapSha256 => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(StableReportMap));
+
     // Report mode descriptor. Separate standard Boot Input characteristics handle Protocol Mode 0.
-    public static readonly byte[] ReportMap =
+    private static readonly byte[] StableReportMap =
     [
         // Keyboard: modifiers, reserved byte, six usages.
         0x05,0x01, 0x09,0x06, 0xA1,0x01, 0x85,KeyboardId,
         0x05,0x07, 0x19,0xE0, 0x29,0xE7, 0x15,0x00, 0x25,0x01,
         0x75,0x01, 0x95,0x08, 0x81,0x02,
         0x95,0x01, 0x75,0x08, 0x81,0x01,
-        // ABNT2 International1 (0x87): positive 16-bit logical maximum.
-        // IDs, lengths and all mouse fields remain identical to the validated map.
-        0x95,0x06, 0x75,0x08, 0x15,0x00, 0x26,0x87,0x00,
-        0x05,0x07, 0x19,0x00, 0x29,0x87, 0x81,0x00, 0xC0,
+        0x95,0x06, 0x75,0x08, 0x15,0x00, 0x25,0x65,
+        0x05,0x07, 0x19,0x00, 0x29,0x65, 0x81,0x00, 0xC0,
         // Mouse: three buttons, padding, signed 16-bit relative X/Y, signed 8-bit wheel.
         0x05,0x01, 0x09,0x02, 0xA1,0x01, 0x85,MouseId,
         0x09,0x01, 0xA1,0x00, 0x05,0x09, 0x19,0x01, 0x29,0x03,
@@ -49,7 +53,7 @@ public static class HidSchema
             modifiers |= (byte)(1 << (usage - 0xE0));
             usage = 0;
         }
-        else if (usage is < 0x04 or > 0x87) { throw new ArgumentOutOfRangeException(nameof(usage)); }
+        else if (usage is < 0x04 or > 0x65) { throw new ArgumentOutOfRangeException(nameof(usage)); }
         byte[] payload = Neutral(KeyboardId);
         payload[0] = modifiers;
         payload[2] = usage;
@@ -59,7 +63,7 @@ public static class HidSchema
     public static byte[] KeyboardState(byte modifiers, IEnumerable<byte> usages)
     {
         byte[] report = Neutral(KeyboardId); report[0] = modifiers;
-        byte[] keys = usages.Where(value => value is >= 4 and <= 0x87).Distinct().Order().ToArray();
+        byte[] keys = usages.Where(value => value is >= 4 and <= 0x65).Distinct().Order().ToArray();
         if (keys.Length > 6) { Array.Fill(report, (byte)1, 2, 6); return report; } // HID ErrorRollOver.
         keys.CopyTo(report, 2); return report;
     }

@@ -6,6 +6,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private IHogpPeripheral? _peripheral;
     private int _generation;
+    private DateTimeOffset? _providerCreatedAt;
     private bool _recreationBlocked;
     private Semaphore? _instance;
     private volatile BluetoothStatus _status = BluetoothStatus.Stopped;
@@ -16,7 +17,8 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     private void Set(BluetoothStatus status)
     {
         BluetoothStatus next;
-        lock (_statusGate) { next = _status = status with { ProviderGeneration = _generation, WindowsObservation = _status.WindowsObservation }; }
+        lock (_statusGate) { next = _status = status with { ProviderGeneration = _generation, ProviderCreatedAt = _providerCreatedAt, WindowsObservation = _status.WindowsObservation }; }
+        if (factory is null) { log.WriteStageSnapshot(next); }
         StatusChanged?.Invoke(next);
     }
     private void OnWindowsObservation(WindowsBluetoothSnapshot snapshot)
@@ -29,6 +31,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     public async Task ConnectAsync(CancellationToken token = default)
     {
         await _lifecycle.WaitAsync(token);
+        bool created = false;
         try
         {
             RequireSafeRecreation();
@@ -41,8 +44,10 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
             _instance = new Semaphore(1, 1, instanceLeaseName ?? "Local\\iMirror.BleHidProbe.Instance");
             if (!_instance.WaitOne(0)) { _instance.Dispose(); _instance = null; throw new InputBlockedException("Feche o probe BLE antes de conectar pelo iMirror."); }
             _peripheral = factory?.Invoke(log) ?? new HogpPeripheral(log);
+            created = true;
             _generation++;
             log.SetProviderGeneration(_generation);
+            _providerCreatedAt = DateTimeOffset.UtcNow;
             log.Write("provider", $"generation={_generation}; created; lifetime=application; local id only");
             _peripheral.StatusChanged += Set;
             await _peripheral.StartAsync(token, waitBluetoothSeconds: 8, enableRadio: true);
@@ -56,7 +61,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
         }
         catch (Exception error)
         {
-            log.Error("connect-error", error); await CleanupAsync();
+            log.Error("connect-error", error); if (created) { await CleanupAsync(); }
             Set(new(error is InputBlockedException && error.Message.Contains("Bluetooth", StringComparison.Ordinal) ? BluetoothState.RadioOff : BluetoothState.Error,
                 error is InputBlockedException ? error.Message : "Erro Bluetooth. Consulte bluetooth-control.log.", []));
         }
@@ -66,11 +71,11 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     public async Task DisconnectAsync()
     {
         await _lifecycle.WaitAsync();
-        try { await CleanupAsync(); ReleaseInstance(); _windowsObserver?.Dispose(); _windowsObserver = null; Set(BluetoothStatus.Stopped with { State = BluetoothState.Disconnected, Message = "Desconectado — reconecte em Ajustes > Bluetooth se necessário" }); }
+        try { await CleanupAsync(); ReleaseInstance(); _windowsObserver?.Dispose(); _windowsObserver = null; Set(BluetoothStatus.Stopped with { State = BluetoothState.Disconnected, Message = "Desconectado — use AssistiveTouch > Dispositivos > Dispositivos Bluetooth" }); }
         finally { _lifecycle.Release(); }
     }
 
-    // User stop keeps the lease if native advertising termination is unconfirmed.
+    // Only advanced recovery pauses the native service. Visual cancel leaves it alive.
     public async Task StopAsync()
     {
         await _lifecycle.WaitAsync();
@@ -78,9 +83,8 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
         {
             Set(new(BluetoothState.Stopping, "Parando Bluetooth...", [], RadioOn: Status.RadioOn));
             log.Write("pairing-stop", "Explicit user stop; AirPlay and system radio unchanged");
-            await CleanupAsync();
-            _windowsObserver?.Dispose(); _windowsObserver = null;
-            SetStoppedStatus();
+            if (_peripheral is not null) { await _peripheral.StopServiceAsync(); Set(_peripheral.GetStatus()); }
+            else { SetStoppedStatus(); }
         }
         finally { _lifecycle.Release(); }
     }
@@ -102,6 +106,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
             await _peripheral.DisposeAsync();
             _recreationBlocked |= !_peripheral.CanRecreateAfterStop;
             _peripheral = null;
+            _providerCreatedAt = null;
             log.Write("provider", $"generation={_generation}; references released; stop confirmed={!_recreationBlocked}");
         }
         // Keep the single-instance lease until exit if native advertising might still be active.
@@ -133,6 +138,7 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
             _generation++;
             log.SetProviderGeneration(_generation);
             log.Write("provider", $"generation={_generation}; created once after explicit reset");
+            _providerCreatedAt = DateTimeOffset.UtcNow;
             _peripheral.StatusChanged += Set;
             Set(new(BluetoothState.Starting, "HID inicializando", []));
             await _peripheral.StartAsync(token, 8, true);
@@ -147,6 +153,18 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
     {
         await _lifecycle.WaitAsync();
         try { if (_peripheral is not null) { await _peripheral.SelectHostAsync(id); } }
+        finally { _lifecycle.Release(); }
+    }
+    public async Task<BluetoothUnpairResult> UnpairHostAsync(string id, CancellationToken token = default)
+    {
+        await _lifecycle.WaitAsync(token);
+        try
+        {
+            if (_peripheral is null || !Status.Hosts.Any(host => host.Id == id && host.CanUnpair && host.Bonded))
+            { throw new InputBlockedException("Selecione um vínculo pareado realmente observado nesta sessão HID."); }
+            var result = await _peripheral.UnpairHostAsync(id, token);
+            Set(_peripheral.GetStatus()); return result;
+        }
         finally { _lifecycle.Release(); }
     }
     public async Task SetAppearanceAsync(ushort? appearance)

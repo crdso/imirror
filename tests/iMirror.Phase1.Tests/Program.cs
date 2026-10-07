@@ -48,7 +48,8 @@ internal static class Program
             Test("Geometria, DPI, debounce, focus e ICO multi-resolução", () => FinalPolishProbe.CheckGeometryAndBranding());
             Test("Renderer nativo: HWND próprio, ícone, aspect e recuperação do painel", () => FinalPolishProbe.CheckRenderer(args[0]));
             Test("UI BLE exige subscriber, restringe ativação e reflete desconexão", () => CheckBluetoothUi(args[0]));
-            Test("Parar Bluetooth cancela inicialização sem parar AirPlay", () => CheckStopDuringBluetoothStartup(args[0]));
+            Test("Cancelar espera é visual durante startup; recuperação exige confirmação", () => CheckStopDuringBluetoothStartup(args[0]));
+            Test("Esquecer vínculo exige host HID conhecido e confirmação; preserva provider", () => CheckSafeUnpairUi(args[0]));
             Test("Botão AirPlay diagnostica a instalação real sem bloquear a UI", () => CheckAirPlayButton(args[0]));
             Test("Executável abre e encerra sem erro", () => CheckExecutable(args));
             Console.WriteLine($"PASS: {_passed} grupos de verificação. Evidências: {args[0]}");
@@ -197,7 +198,7 @@ internal static class Program
             var airPlay = (Button)window.FindName("AirPlayButton");
             var bluetooth = (Button)window.FindName("BluetoothButton");
             var fullscreen = (Button)window.FindName("FullscreenButton");
-            Assert(airPlay.Command == model.AirPlayCommand && bluetooth.Command == model.BluetoothCommand,
+            Assert(airPlay.Command == model.AirPlayCommand && bluetooth.Command == model.PairingCommand,
                 "Bindings dos botões ausentes.");
             airPlay.Command.Execute(null);
             Pump();
@@ -293,7 +294,7 @@ internal static class Program
         using var log = new FileDiagnosticLog(Path.Combine(directory,"bluetooth-ui"));
         using var controlLog = new BluetoothControlLog(Path.Combine(directory,"bluetooth-ui-control.log"));
         var receiver = new MissingReceiver(); var bluetooth = new FakeBluetooth();
-        using var model = new MainViewModel(log,receiver,bluetooth,Dispatcher.CurrentDispatcher,log.FilePath,controlLog,()=>0);
+        using var model = new MainViewModel(log,receiver,bluetooth,Dispatcher.CurrentDispatcher,log.FilePath,controlLog,()=>0, _ => true);
         var window = new MainWindow(model) { ShowActivated=false, ShowInTaskbar=false, Left=-10000,Top=-10000,WindowStartupLocation=WindowStartupLocation.Manual };
         try
         {
@@ -311,11 +312,15 @@ internal static class Program
             Assert(!control.IsEnabled && !model.CanControl,"Control allowed without mouse subscriber.");
             model.BluetoothCommand.Execute(null);
             while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
-            Pump(); Assert(!model.Bluetooth.IsConnected && model.BluetoothButtonText == "Conectar Bluetooth","Advertising mistaken for HID success.");
+            Pump(); Assert(!model.Bluetooth.IsConnected && model.BluetoothButtonText == "Cancelar espera","Advertising mistaken for HID success.");
             model.BluetoothCommand.Execute(null);
             while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
             Pump();
-            Assert(bluetooth.Connects == 1 && bluetooth.Disconnects == 0 && !connect.IsEnabled && stopBluetooth.IsEnabled,"Waiting must expose Stop instead of renewing pairing through Connect.");
+            Assert(bluetooth.Connects == 1 && bluetooth.Disconnects == 0 && connect.IsEnabled && stopBluetooth.IsEnabled,"Pairing toggle must remain available without recreating HOGP.");
+            model.PairingCommand.Execute(null); Pump();
+            Assert(!model.PairingVisible && bluetooth.Stops == 0 && bluetooth.Disconnects == 0 && model.BluetoothButtonText == "Mostrar pareamento", "Visual cancel must preserve provider/advertising.");
+            model.PairingCommand.Execute(null); Pump();
+            Assert(model.PairingVisible && bluetooth.Connects == 1, "Showing pairing must not start another provider.");
             receiver.Stream(); Pump();
             model.StopBluetoothCommand.Execute(null);
             while(!model.StopBluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
@@ -364,18 +369,25 @@ internal static class Program
     {
         using var log = new FileDiagnosticLog(Path.Combine(directory, "bluetooth-stop-startup"));
         var receiver = new MissingReceiver(); receiver.Stream();
-        var bluetooth = new FakeBluetooth { HoldStartup = true };
-        using var model = new MainViewModel(log, receiver, bluetooth, Dispatcher.CurrentDispatcher, log.FilePath);
-        model.BluetoothCommand.Execute(null);
+        var startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bluetooth = new FakeBluetooth { HoldStartup = true, StartupCompletion = startup.Task };
+        bool approved = false;
+        using var model = new MainViewModel(log, receiver, bluetooth, Dispatcher.CurrentDispatcher, log.FilePath, confirmRecovery: _ => approved);
+        model.PairingCommand.Execute(null);
         Assert(model.CanStopBluetooth && !model.CanConnectBluetooth, "Stop must be available while native startup is pending.");
-        model.StopBluetoothCommand.Execute(null);
-        model.BluetoothCommand.Execute(null);
+        model.PairingCommand.Execute(null);
+        Assert(!model.PairingVisible && !model.BluetoothCommand.ExecutionTask.IsCompleted && bluetooth.Stops == 0 && bluetooth.Disconnects == 0, "Visual cancel must not cancel native startup/dispose provider.");
+        startup.SetResult();
         var timeout = Stopwatch.StartNew();
-        while (!model.StopBluetoothCommand.ExecutionTask.IsCompleted && timeout.Elapsed < TimeSpan.FromSeconds(5)) { Pump(); Thread.Sleep(10); }
-        Assert(model.StopBluetoothCommand.ExecutionTask.IsCompleted, "Stop did not cancel pending startup.");
-        model.StopBluetoothCommand.ExecutionTask.GetAwaiter().GetResult(); Pump();
-        Assert(bluetooth.Connects == 1 && bluetooth.Stops == 1 && receiver.IsRunning && model.CanConnectBluetooth && !model.CanStopBluetooth,
-            "Startup cancellation must stop only Bluetooth, without another Connect racing it.");
+        while (!model.BluetoothCommand.ExecutionTask.IsCompleted && timeout.Elapsed < TimeSpan.FromSeconds(5)) { Pump(); Thread.Sleep(10); }
+        Assert(model.BluetoothCommand.ExecutionTask.IsCompleted, "Native startup did not complete after visual cancellation.");
+        model.BluetoothCommand.ExecutionTask.GetAwaiter().GetResult(); Pump();
+        Assert(bluetooth.Connects == 1 && bluetooth.Stops == 0 && receiver.IsRunning && !model.CanConnectBluetooth && model.CanStopBluetooth,
+            "Visual cancellation must leave one live provider and AirPlay running.");
+        model.StopBluetoothCommand.Execute(null);
+        while(!model.StopBluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+        Assert(bluetooth.Stops == 0, "Unconfirmed recovery must not call the native stop.");
+        approved = true;
         bluetooth.Publish(true, true); Pump();
         Assert(model.CanControl, "Connected HID/stream must allow control before stop.");
         var stopGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -393,15 +405,16 @@ internal static class Program
     private sealed class FakeBluetooth : IBluetoothController
     {
         public BluetoothStatus Status { get; private set; } = BluetoothStatus.Stopped;
-        public int Disconnects, Connects, Stops;
+        public int Disconnects, Connects, Stops, Unpairs;
         public bool StopUnconfirmed;
         public bool HoldStartup;
+        public Task? StartupCompletion;
         public Task? StopCompletion;
         public event Action<BluetoothStatus>? StatusChanged;
-        public void Publish(bool keyboard,bool mouse)
+        public void Publish(bool keyboard,bool mouse, bool canUnpair=false)
         {
             Status = new(keyboard||mouse ? BluetoothState.HidConnected : BluetoothState.Disconnected,"test",
-                [new("fake","H1","Test host",true,"test",keyboard,mouse,true,true,true)],"fake",keyboard,mouse);
+                [new("fake","H1","Test host",true,"test",keyboard,mouse,true,true,true,CanUnpair:canUnpair)],"fake",keyboard,mouse);
             StatusChanged?.Invoke(Status);
         }
         public void PublishWindowsOnly()
@@ -414,7 +427,7 @@ internal static class Program
         {
             Connects++;
             Status=new(HoldStartup ? BluetoothState.Starting : BluetoothState.WaitingForPairing,"Aguardando pareamento",[]); StatusChanged?.Invoke(Status);
-            if (HoldStartup) { await Task.Delay(Timeout.Infinite, token); }
+            if (HoldStartup) { await (StartupCompletion ?? Task.Delay(Timeout.Infinite, token)).WaitAsync(token); Status = Status with { State = BluetoothState.WaitingForPairing }; StatusChanged?.Invoke(Status); }
         }
         public Task DisconnectAsync() { Disconnects++; Publish(false,false); return Task.CompletedTask; }
         public async Task StopAsync()
@@ -426,10 +439,32 @@ internal static class Program
             StatusChanged?.Invoke(Status);
         }
         public Task SelectHostAsync(string id)=>Task.CompletedTask;
+        public Task<BluetoothUnpairResult> UnpairHostAsync(string id, CancellationToken token=default)
+        {
+            Assert(id == "fake" && Status.Hosts.Single().CanUnpair, "Unpair targeted an unknown device");
+            Unpairs++; return Task.FromResult(new BluetoothUnpairResult("Unpaired", true));
+        }
         public Task SetAppearanceAsync(ushort? appearance)=>Task.CompletedTask;
         public Task SendMouseAsync(byte buttons,int dx,int dy,int wheel,CancellationToken token)=>throw new InvalidOperationException("Test must not send input");
         public Task SendKeyboardAsync(byte modifiers,byte[] usages,CancellationToken token)=>throw new InvalidOperationException("Test must not send input");
         public Task ReleaseAsync()=>Task.CompletedTask;
+    }
+
+    private static void CheckSafeUnpairUi(string directory)
+    {
+        using var log = new FileDiagnosticLog(Path.Combine(directory,"unpair-ui"));
+        var receiver = new MissingReceiver(); receiver.Stream(); var bluetooth = new FakeBluetooth();
+        bool approved=false;
+        using var model = new MainViewModel(log,receiver,bluetooth,Dispatcher.CurrentDispatcher,log.FilePath,confirmRecovery: _=>approved);
+        void Execute()
+        { model.UnpairHostCommand.Execute(null); while(!model.UnpairHostCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); } Pump(); }
+        Assert(!model.CanUnpairHost,"Unpair enabled without HID host"); Execute(); Assert(bluetooth.Unpairs==0,"Unknown host unpaired");
+        bluetooth.Publish(true,true); Pump(); Assert(!model.CanUnpairHost,"Unpair enabled without exact eligible Windows bond");
+        bluetooth.Publish(true,true,canUnpair:true); Pump(); model.SelectedHost=model.Hosts.Single(); Pump();
+        Assert(model.CanUnpairHost,"Known paired HID host cannot be recovered"); Execute(); Assert(bluetooth.Unpairs==0,"Unpair ran without confirmation");
+        approved=true; Execute();
+        Assert(bluetooth.Unpairs==1 && model.Notice.Contains("DeviceUnpairingResult: Unpaired") && bluetooth.Disconnects==0 && bluetooth.Stops==0 && receiver.IsRunning,"Unpair result/lifecycle unsafe");
+        var shutdown=model.ShutdownAsync(); while(!shutdown.IsCompleted) { Pump(); Thread.Sleep(10); } shutdown.GetAwaiter().GetResult();
     }
 
     private static void CheckAirPlayButton(string directory)

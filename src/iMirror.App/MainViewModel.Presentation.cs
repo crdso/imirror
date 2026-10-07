@@ -25,6 +25,7 @@ public sealed partial class MainViewModel
         BluetoothState.RadioOff => "Bluetooth desligado",
         BluetoothState.Error => "Erro no Bluetooth · confira Diagnóstico",
         BluetoothState.Stopped => Bluetooth.Message,
+        _ when !_pairingVisible && _bluetoothStarted && !Bluetooth.ControlReady => "Serviço HID ativo · espera recolhida",
         BluetoothState.WaitingForPairing when Bluetooth.PairingTimedOut => "Sem resposta HID após 30 s · anúncio mantido",
         _ => Bluetooth.Message
     };
@@ -39,12 +40,15 @@ public sealed partial class MainViewModel
                 Step(host?.ReportMapRead == true, "Report Map"), Step(Bluetooth.KeyboardConnected, "Keyboard · subscription"), Step(Bluetooth.MouseConnected, "Mouse · subscription"));
         }
     }
-    public string PairingGuidance => Bluetooth.State is BluetoothState.Error or BluetoothState.Stopped or BluetoothState.Stopping or BluetoothState.StopUnconfirmed ? Bluetooth.Message : Bluetooth.PairingTimedOut ? Bluetooth.DiagnosticHost?.GattActive == true ?
+    public string PairingGuidance => Bluetooth.State is BluetoothState.Error or BluetoothState.Stopped or BluetoothState.Stopping or BluetoothState.StopUnconfirmed ? Bluetooth.Message :
+        Bluetooth.DiagnosticHost is { } identified && (identified.GattActive || identified.HidInformationRead) ? "✓ Esta é a conexão HID correta. Aguarde Keyboard e Mouse subscriber live." :
+        _pairingVisible && _visualPairingStarted is { } began && DateTimeOffset.UtcNow - began >= TimeSpan.FromSeconds(10) ?
+        "Essa conexão não chegou ao HID do iMirror. Nenhuma etapa HID foi observada nos últimos 10 s; o provider permanece ativo." : Bluetooth.PairingTimedOut ? Bluetooth.DiagnosticHost?.GattActive == true ?
         "Pareamento detectado, mas o iPhone não ativou Mouse/Keyboard HID. O serviço continua disponível." :
         Bluetooth.WindowsObservation?.BleConnected == true ?
-        "O Windows detectou um vínculo BLE, mas o iMirror não recebeu atividade HID. Pode haver falha antes da leitura criptografada ou cache antigo; a causa ainda não foi confirmada." :
+        "O Windows detectou um vínculo BLE, mas essa conexão não chegou ao HID do iMirror. Aguarde as etapas reais pelo AssistiveTouch; o mesmo provider permanece ativo." :
         "Nenhuma atividade HID chegou ao iMirror. Se o iPhone informa conectado, isso ainda não confirma BLE HID. Confira os vínculos do Windows abaixo e use Problemas para parear?." :
-        "No iPhone: Ajustes → Acessibilidade → Toque → AssistiveTouch → Dispositivos → Dispositivos Bluetooth. A conexão HID é confirmada pelos subscribers reais.";
+        "Para mouse: faça o pareamento em Ajustes → Acessibilidade → Toque → AssistiveTouch → Dispositivos → Dispositivos Bluetooth. Bluetooth normal não confirma HOGP.";
     public string WindowsBluetoothStatus => Bluetooth.WindowsObservation is { } snapshot ? snapshot.Summary +
         (snapshot.Links.Count == 0 ? "\nNenhum vínculo conhecido foi retornado nesta consulta. Isso não é uma captura de todos os links BLE do rádio." :
         "\n" + string.Join("\n", snapshot.Links.Take(8).Select(link => $"{link.DisplayName} · {link.Transport} · {(link.Paired ? "pareado" : "não pareado")} · {(link.Connected == true ? "conectado" : link.Connected == false ? "desconectado" : "link não informado")}")) + "\nVínculos conhecidos; esta consulta não captura todos os links do rádio.") :
@@ -93,7 +97,7 @@ public sealed partial class MainViewModel
     private void InitializePresentationCommands()
     {
         DiagnosticsCommand = new RelayCommand(() => DiagnosticsOpen = true);
-        PairingHelpCommand = new RelayCommand(() => MessageBox.Show("1. Não ligue/desligue o provider repetidamente.\n2. Se aparecerem duas entradas do PC, escolha uma e aguarde as etapas HID.\n3. A entrada correta fará HID Information, Report Map, Keyboard e Mouse avançarem.\n4. Sem atividade HID, esqueça apenas aquela entrada no iPhone e tente a outra.\n5. AssistiveTouch não é necessário para parear; só para mostrar o ponteiro.\n\nNão é possível remover a entrada Classic do iPhone pelo iMirror.", "iMirror — problemas para parear?", MessageBoxButton.OK, MessageBoxImage.Information));
+        PairingHelpCommand = new RelayCommand(() => MessageBox.Show("Use um único caminho: Ajustes → Acessibilidade → Toque → AssistiveTouch → Dispositivos → Dispositivos Bluetooth. Selecione o PC uma vez e aguarde as etapas HID. Sessão GATT/HID Information identificam a conexão correta; Conectado no Bluetooth normal não basta. Não alterne rádio nem reinicie provider durante o teste. Cancelar espera recolhe somente a UI. Recuperação avançada fica em Configurações.", "iMirror — pareamento estável", MessageBoxButton.OK, MessageBoxImage.Information));
         CloseDiagnosticsCommand = new RelayCommand(() => DiagnosticsOpen = false);
         ClearLogsCommand = new RelayCommand(() => { _entries.Clear(); _allEntries.Clear(); }); // Persisted files remain intact.
         CopyLogsCommand = new RelayCommand(() => PresentationAction(() => Clipboard.SetText(string.Join(Environment.NewLine, LogView.Cast<LogEntry>().Select(entry => entry.DisplayText)))));

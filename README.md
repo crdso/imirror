@@ -10,11 +10,10 @@ Espelhe e controle o iPhone pelo Windows: **AirPlay/UxPlay** recebe o vídeo em 
 Validação informada pelo usuário: iPhone 14 em iOS 27.0.1, Windows 10 x64 build 19045 e adaptador Realtek com BLE peripheral.
 
 - AirPlay: conexão e vídeo externo confirmados.
-- **PHASE 3 BLE TRANSPORT: PHYSICALLY VALIDATED**
-- **PHASE 3 INPUT: PHYSICALLY VALIDATED**
-- **PHASE 3 UX: UPDATED — PENDING USER VALIDATION**
+- BLE/input: fisicamente validados no checkpoint **8262f344**. A conexão posterior apresentou quedas; o transporte atual voltou ao schema daquele checkpoint.
+- **READY FOR STABLE IPHONE HID REVALIDATION** — conexão contínua de 10 minutos e reconexão no mesmo provider ainda precisam do iPhone.
 
-A nova interface, símbolos/acentos ABNT2, wheel, rotação e reconexão específica ainda precisam dos testes previstos no [roteiro físico](docs/PHASE3B_VALIDATION.md). Testes sintéticos não substituem essa validação.
+A revalidação atual segue uma única rotina em [iOS Stable](docs/IOS_STABLE_HID_REVALIDATION.md). Wheel, rotação e demais testes de input permanecem no [roteiro físico](docs/PHASE3B_VALIDATION.md). Testes sintéticos não substituem essa validação.
 
 ## Instalação e release
 
@@ -46,17 +45,17 @@ O Bonjour é um serviço instalado separadamente; a DLL do pacote não substitui
 
 1. Em **Espelhamento**, clique **Iniciar AirPlay**. No iPhone, abra Central de Controle → Espelhamento de Tela → **iMirror - Windows**.
 2. O vídeo abre em janela externa. **Abrir janela de vídeo** traz essa janela para frente quando o Windows permitir.
-3. Em **Controle**, clique **Conectar Bluetooth** e pareie este PC nos Ajustes → Bluetooth do iPhone. Ative AssistiveTouch para ver o ponteiro.
-4. Com vídeo ativo e mouse conectado, clique **Ativar controle** e use a janela de vídeo em foco.
+3. Em **Controle**, clique **Conectar Bluetooth**. No iPhone: Ajustes → Acessibilidade → Toque → **AssistiveTouch → Dispositivos → Dispositivos Bluetooth**, selecione o PC uma vez.
+4. Com vídeo ativo e subscribers live de **mouse e teclado**, clique **Ativar controle** e use a janela de vídeo em foco.
 5. **Esc / Ctrl+Alt+Q** interrompe a captura e libera o cursor. **F11** alterna fullscreen da interface; Esc sai. A janela externa continua independente.
 
 **Mouse:** velocidade linear de 0,25x–3x, padrão 1x; scroll usa intensidade de 1–5. O controle é relativo, preserva aspect ratio/letterboxing e DPI. Cursor local oculto só dentro do vídeo; saída, perda de foco, desconexão e fechamento enviam releases e devolvem o input ao Windows.
 
-**Teclado / ABNT2:** escolha Auto, Português Brasil ABNT2 ou US. Configure o mesmo layout em Ajustes → Geral → Teclado → Teclado Físico no iPhone. Usa teclas físicas e composição por teclas mortas. Reative o controle após mudar layout ou velocidade. Para usar também o teclado do iPhone, ative Mostrar Teclado na Tela no AssistiveTouch.
+**Teclado / ABNT2:** escolha Auto, Português Brasil ABNT2 ou US. Configure o mesmo layout em Ajustes → Geral → Teclado → Teclado Físico no iPhone. Usa teclas físicas e composição por teclas mortas. O perfil padrão **iOS Stable / Known Good** aceita usages até 0x65: International1 do ABNT2 (`/` e `?`, usage 0x87) fica explicitamente indisponível; o layout US mantém esses caracteres. O mapper não estende o descriptor. Reative o controle após mudar layout ou velocidade. Para usar também o teclado do iPhone, ative Mostrar Teclado na Tela no AssistiveTouch.
 
-**Reconexão:** reconecte em Ajustes → Bluetooth se necessário e reative o controle. A captura não recomeça automaticamente após perda do link/suspensão.
+**Reconexão:** use o mesmo caminho do AssistiveTouch se necessário e reative o controle. A captura não recomeça automaticamente após perda do link/suspensão.
 
-**Pareamento HID:** o provider permanece vivo até parar Bluetooth ou encerrar o app. Em Controle, **Parar Bluetooth** cancela a inicialização/espera e solicita a parada do anúncio HID, sem encerrar AirPlay ou desligar o rádio. **Conectar Bluetooth** fica desabilitado durante a espera, evitando cliques que renovem o pareamento. Uma parada confirmada permite conectar de novo; se o Windows não confirmar, a interface pede para fechar e reabrir e bloqueia outro provider na mesma sessão. Parar AirPlay ou a captura de controle preserva HOGP. A página mostra sessão GATT, HID Information, Report Map e subscribers reais de Keyboard/Mouse. Após 30s há aviso visual; o serviço continua disponível até uma parada explícita. **Problemas para parear?** orienta a recuperação; **Reiniciar serviço HID**, em Configurações, é um reset único com confirmação.
+**Pareamento HID:** após o primeiro clique, **Cancelar espera** apenas recolhe a UI; **Mostrar pareamento** volta a exibi-la. Provider, advertising e vínculo continuam ativos. Queda, timeout, parar AirPlay/controle ou perder foco não recriam HOGP. Controle mostra geração, lifetime, etapas GATT/Info/Map e subscribers reais; ambos live habilitam input. Advertising usa recuperação limitada de 1/2/5 s no mesmo provider. Em Configurações → Recuperação avançada, **Parar serviço HID** pausa o anúncio com confirmação, preservando o objeto; **Reiniciar serviço HID** recria explicitamente, somente após parada confirmada. **Esquecer vínculo deste iPhone no Windows** exige host da sessão HID exata, bond conhecido e confirmação; mostra o resultado real de UnpairAsync. Nenhuma busca/remoção por nome.
 
 **Janelas / modo foco:** o painel abre dimensionado e centralizado na WorkArea, com último tamanho/posição validado. A janela **iMirror — iPhone** usa o ícone vermelho e ajuste opcional à resolução/orientação/DPI; não interfere no resize manual até mudar o stream. Em Configurações, ative **Ocultar painel durante o espelhamento**. Ele só desaparece com renderer visível; volta pela bandeja ou **Ctrl+Alt+I**, com **Ctrl+Alt+Shift+I** como fallback. Durante captura, o atalho também libera input. Parada, erro ou fechamento do renderer recuperam o painel. F11 continua independente.
 
@@ -68,9 +67,9 @@ O filtro normal preserva eventos relevantes; **Verbose** mostra detalhes nativos
 
 ## Desenvolvimento e build
 
-**Reconexão Bluetooth em investigação:** a página Controle agora mostra vínculos Classic/BLE conhecidos pelo Windows separadamente das etapas HID. Um dispositivo marcado conectado no sistema não habilita controle sem subscriptions. Veja [evidências e próximo teste físico](docs/BLUETOOTH_CONNECTION_INVESTIGATION.md); a tentativa atual ainda não está aprovada.
+**Compatibilidade HID estável:** Report Map de 113 bytes idêntico ao commit 8262f344, com SHA256 e banco GATT congelados por testes e guard de build. Veja [comparação, validação e teste físico único](docs/IOS_STABLE_HID_REVALIDATION.md). As observações anteriores estão no [histórico](docs/BLUETOOTH_CONNECTION_INVESTIGATION.md).
 
-Após 30 segundos sem resposta, Controle exibe o timeout no topo e mantém o anúncio. Para diagnóstico do controlador, `Diagnosticar-Bluetooth.cmd` abre Controle se necessário e solicita UAC para uma coleta de 90 segundos em segundo plano, sem salvar pacotes/chaves/teclas. O resultado fica em `logs/bluetooth-link-trace.log`; não altera rádio, bonds ou rede.
+Após 10 s sem etapas HID, a UI informa que a conexão não chegou ao HOGP; o provider continua ativo. Logs incluem saúde HID periódica. O coletor nativo opcional existente também classifica 0x13 como `REMOTE_TERMINATION`, com elapsed LE quando observado e snapshot sanitizado das etapas; a correlação entre link do rádio e host GATT permanece explícita. Nenhuma nova coleta é necessária para iniciar a revalidação estável.
 
 SDK .NET **10.0.401** conforme global.json; Git; Windows. Restore só usa pacotes Microsoft da fonte oficial configurada. O SDK local é mantido em .tools/dotnet. O runtime nativo local foi reduzido; **recompilar WPF não exige MSYS2 completo**.
 

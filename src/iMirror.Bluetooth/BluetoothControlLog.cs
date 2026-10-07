@@ -12,12 +12,16 @@ public sealed class BluetoothControlLog : IDisposable
     private bool _closed;
     private readonly string _session = Guid.NewGuid().ToString("N")[..8];
     private int _providerGeneration;
+    private readonly string _stagePath;
+    private int _stageGeneration = -1;
+    private bool _gattObserved, _keyboardObserved, _mouseObserved;
     public void SetProviderGeneration(int generation) => Volatile.Write(ref _providerGeneration, generation);
     public event Action<string, string>? Written;
 
     public BluetoothControlLog(string path, bool echo = false)
     {
         _echo = echo;
+        _stagePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, "bluetooth-hid-stage.json");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         _writer = new BoundedLogFile(path);
     }
@@ -31,6 +35,31 @@ public sealed class BluetoothControlLog : IDisposable
             _writer.WriteLine(line);
             if (_echo) { Console.WriteLine(line); }
             Written?.Invoke(category, message);
+        }
+    }
+    public void WriteStageSnapshot(BluetoothStatus status)
+    {
+        lock (_gate)
+        {
+            if (_closed) { return; }
+            var host = status.DiagnosticHost;
+            int generation = Volatile.Read(ref _providerGeneration);
+            if (_stageGeneration != generation) { _stageGeneration = generation; _gattObserved = _keyboardObserved = _mouseObserved = false; }
+            _gattObserved |= host?.GattActive == true;
+            _keyboardObserved |= status.KeyboardConnected; _mouseObserved |= status.MouseConnected;
+            bool? Known(Func<BluetoothHost, bool> value) => host is not null ? value(host) : status.Hosts.Count == 0 ? false : null;
+            var snapshot = new { AtUtc = DateTimeOffset.UtcNow, ProviderGeneration = generation,
+                GattSession = _gattObserved, GattSessionActive = Known(h => h.GattActive), HidInformation = Known(h => h.HidInformationRead),
+                ReportMap = Known(h => h.ReportMapRead), ProtocolMode = Known(h => h.ProtocolModeWritten),
+                KeyboardCCCD = _keyboardObserved, MouseCCCD = _mouseObserved,
+                KeyboardLive = status.KeyboardConnected, MouseLive = status.MouseConnected };
+            try
+            {
+                File.WriteAllText(_stagePath + ".tmp", System.Text.Json.JsonSerializer.Serialize(snapshot));
+                File.Move(_stagePath + ".tmp", _stagePath, overwrite:true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { Write("stage-snapshot", $"Snapshot unavailable; HRESULT=0x{error.HResult:X8}"); }
         }
     }
 

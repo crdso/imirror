@@ -93,7 +93,15 @@ $trace = New-Object iMirror.Diagnostics.BluetoothLinkTrace
 $lease = [Threading.Mutex]::new($false, 'Local\iMirror.Bluetooth.LinkTrace')
 $ownsLease = $false
 $logWriter = $null
-function Write-TraceLines { foreach ($line in $trace.Drain()) { $logWriter.WriteLine($line); Write-Host $line } }
+. "$PSScriptRoot/bluetooth-termination-context.ps1"
+$leConnections = @{}
+function Write-TraceLines {
+    foreach ($line in $trace.Drain()) {
+        $logWriter.WriteLine($line); Write-Host $line
+        $context = Get-BluetoothTerminationContext -Line $line -Connections $leConnections -SnapshotPath (Join-Path $directory 'bluetooth-hid-stage.json')
+        if ($context) { $logWriter.WriteLine($context); Write-Host $context }
+    }
+}
 try {
     try { $ownsLease = $lease.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsLease = $true }
     if (-not $ownsLease) { throw 'Uma coleta já está ativa. Aguarde seu término; não será aberta outra sessão.' }

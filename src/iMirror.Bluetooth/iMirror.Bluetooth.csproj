@@ -6,4 +6,7 @@
     <ProjectReference Include="..\iMirror.Core\iMirror.Core.csproj" />
     <InternalsVisibleTo Include="iMirror.Phase3.Tests" />
   </ItemGroup>
+  <Target Name="VerifyIosStableSchema" BeforeTargets="CoreCompile" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\tools\verify-ios-stable-schema.ps1&quot;" />
+  </Target>
 </Project>

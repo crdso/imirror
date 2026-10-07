@@ -3,11 +3,12 @@ namespace iMirror.Bluetooth;
 public enum BluetoothState { Stopped, RadioOff, Starting, WaitingForPairing, BondedWithoutHid, HidConnected, Disconnected, Error, Advertising, GattDetected, KeyboardConnected, MouseConnected, HidIncomplete, ReconnectionRequired, Stopping, StopUnconfirmed }
 public sealed record BluetoothHost(string Id, string Alias, string DisplayName, bool Bonded,
     string ConnectionStatus, bool KeyboardSubscribed, bool MouseSubscribed,
-    bool HidInformationRead, bool ReportMapRead, bool ProtocolModeWritten, bool GattActive = false);
+    bool HidInformationRead, bool ReportMapRead, bool ProtocolModeWritten, bool GattActive = false, bool CanUnpair = false);
 public sealed record BluetoothStatus(BluetoothState State, string Message, IReadOnlyList<BluetoothHost> Hosts,
     string? SelectedHostId = null, bool KeyboardConnected = false, bool MouseConnected = false, byte ProtocolMode = 1,
     bool Advertising = false, bool RadioOn = false, bool PairingTimedOut = false, int ProviderGeneration = 0,
-    WindowsBluetoothSnapshot? WindowsObservation = null)
+    WindowsBluetoothSnapshot? WindowsObservation = null, DateTimeOffset? ProviderCreatedAt = null,
+    AdvertisingState AdvertisingRecoveryState = AdvertisingState.Idle, DateTimeOffset? HidReadySince = null, bool HidReconnectObserved = false)
 {
     public static BluetoothStatus Stopped { get; } = new(BluetoothState.Stopped, "Controle Bluetooth desligado", []);
     public string StateText => Message;
@@ -24,6 +25,7 @@ public interface IBluetoothController
     Task ConnectAsync(CancellationToken token = default);
     Task DisconnectAsync();
     Task StopAsync() => DisconnectAsync();
+    Task<BluetoothUnpairResult> UnpairHostAsync(string id, CancellationToken token = default) => throw new InputBlockedException("Nenhum vínculo HID conhecido disponível.");
     Task RestartAsync(CancellationToken token = default) => throw new InputBlockedException("Reset HID não disponível.");
     Task SelectHostAsync(string id);
     Task SetAppearanceAsync(ushort? appearance);
@@ -40,7 +42,11 @@ public interface IHogpPeripheral : IAsyncDisposable
     BluetoothStatus GetStatus();
     Task StartAsync(CancellationToken token, int waitBluetoothSeconds = 0, bool enableRadio = false);
     void BeginPairing();
+    Task StopServiceAsync() => throw new InputBlockedException("Parada avançada não disponível.");
+    Task<BluetoothUnpairResult> UnpairHostAsync(string id, CancellationToken token) => throw new InputBlockedException("Nenhum vínculo HID conhecido disponível.");
     Task SelectHostAsync(string id);
     Task SendAsync(byte id, byte[] payload, CancellationToken token);
     Task ReleaseAsync();
 }
+
+public sealed record BluetoothUnpairResult(string Status, bool Success);

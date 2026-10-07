@@ -12,4 +12,6 @@ try {
     Invoke-ProjectDotNet -Arguments @('run', '--project', 'tests\iMirror.Phase3.Tests\iMirror.Phase3.Tests.csproj',
         '--configuration', $Configuration, '--no-build')
     & "$PSScriptRoot\trace-bluetooth-link.ps1" -SelfTest
+    & "$PSScriptRoot\test-ios-stable-safety.ps1"
+    & "$PSScriptRoot\test-bluetooth-termination-context.ps1"
 } finally { Pop-Location }

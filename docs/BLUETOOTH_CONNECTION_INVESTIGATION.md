@@ -1,6 +1,6 @@
 # Investigação da conexão Bluetooth — 2026-10-07
 
-**Estado: PENDING LIVE IPHONE CONNECTION DIAGNOSIS.** A conexão HID desta sessão não foi validada e a causa da falha permanece sem confirmação. As validações físicas anteriores de transporte/input são históricas; não comprovam a reconexão atual.
+**Registro histórico, substituído pela revalidação iOS Stable.** O próximo teste e o rollback controlado estão em [IOS_STABLE_HID_REVALIDATION.md](IOS_STABLE_HID_REVALIDATION.md). As seções abaixo descrevem versões anteriores e não orientam a recuperação atual.
 
 ## Evidência e limites
 

@@ -22,19 +22,20 @@ public static class KeyboardLayout
     public static byte Usage(int vk, uint scan, bool extended, KeyboardLayoutMode mode)
     {
         if (vk == 0x1B || VirtualKeyMap.Modifier(vk) != 0) { return 0; }
+        if (scan == 0x73 || vk == 0xC1) { return 0; } // International1 is outside iOS Stable.
         if (extended) { return vk == 0x0D ? (byte)0x58 : vk == 0x6F ? (byte)0x54 : VirtualKeyMap.Usage(vk); }
         byte usage = scan switch
         {
             0x0C => 0x2D, 0x0D => 0x2E, 0x1A => 0x2F, 0x1B => 0x30,
             0x2B => 0x31, 0x27 => 0x33, 0x28 => 0x34, 0x29 => 0x35,
-            0x33 => 0x36, 0x34 => 0x37, 0x35 => 0x38, 0x56 => 0x64, 0x73 => 0x87,
+            0x33 => 0x36, 0x34 => 0x37, 0x35 => 0x38, 0x56 => 0x64, 0x73 => 0,
             _ => 0
         };
         if (usage != 0) { return usage; }
         if (mode == KeyboardLayoutMode.PortugueseBrazilAbnt2)
         {
             return vk switch { 0xC0 => 0x35, 0xDE => 0x2F, 0xDB => 0x30, 0xDD => 0x31,
-                0xBA => 0x33, 0xDC => 0x34, 0xBF => 0x38, 0xE2 => 0x64, 0xC1 => 0x87, _ => VirtualKeyMap.Usage(vk) };
+                0xBA => 0x33, 0xDC => 0x34, 0xBF => 0x38, 0xE2 => 0x64, 0xC1 => 0, _ => VirtualKeyMap.Usage(vk) };
         }
         return vk == 0xE2 ? (byte)0x64 : VirtualKeyMap.Usage(vk);
     }
@@ -60,13 +61,15 @@ public static class KeyboardLayout
         const string shifted = "\"{}:<>?|_+ ";
         byte[] usages = [0x35,0x30,0x31,0x38,0x36,0x37,0x87,0x64,0x2D,0x2E,0x2C];
         index = plain.IndexOf(value);
-        if (index >= 0) { return [new(usages[index])]; }
+        if (index >= 0) { return StableKey(usages[index]); }
         index = shifted.IndexOf(value);
-        if (index >= 0) { return [new(usages[index], 2)]; }
+        if (index >= 0) { return StableKey(usages[index], 2); }
         if (value == '@') { return [new(0x1F,2)]; }
         var ascii = HidSchema.MapAscii(value); return [new(ascii[2],ascii[0])];
     }
     private static PhysicalKey Letter(char value) => new((byte)(4 + value - 'a'));
+    private static PhysicalKey[] StableKey(byte usage, byte modifiers = 0) => usage <= HidSchema.MaximumKeyboardUsage
+        ? [new(usage, modifiers)] : throw new InputBlockedException("iOS Stable: a tecla ABNT2 International1 (/ e ?) exige usage 0x87, fora do descriptor validado. Nenhum texto foi enviado.");
     private static PhysicalKey Dead(char value) => value switch { '´' => new(0x2F), '`' => new(0x2F,2), '~' => new(0x34), '^' => new(0x34,2), _ => throw new ArgumentException("Dead key inválida.") };
     public static byte[][] PrepareText(string text, KeyboardLayoutMode mode)
     {

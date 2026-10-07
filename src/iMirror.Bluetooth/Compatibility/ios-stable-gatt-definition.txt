@@ -1,0 +1,195 @@
+GattLocalService service = _provider.Service;
+        await ReadableAsync(service, 0x2A4A, "HID Information", () => [0x11, 0x01, 0x00, 0x03], token);
+        await ReadableAsync(service, 0x2A4B, "Report Map", () => HidSchema.ReportMap, token);
+        await ControlPointAsync(service, token);
+        await ProtocolAsync(service, token);
+        _keyboard = await InputAsync(service, HidSchema.KeyboardId, token);
+        _mouse = await InputAsync(service, HidSchema.MouseId, token);
+        _bootKeyboard = await BootInputAsync(service, 0x2A22, "boot keyboard", () => _keyboardValue, token);
+        _bootMouse = await BootInputAsync(service, 0x2A33, "boot mouse", () => BootMouse(_mouseValue), token);
+        await BootOutputAsync(service, token);
+        var battery = await GattServiceProvider.CreateAsync(HidSchema.Uuid(0x180F)).AsTask(token);
+        log.Write("gatt", $"Battery Service 0x180F={battery.Error}");
+        if (battery.Error != BluetoothError.Success) { throw new InputBlockedException($"Battery Service: {battery.Error}"); }
+        _batteryProvider = battery.ServiceProvider;
+        GattLocalCharacteristic level = await CreateAsync(_batteryProvider.Service, 0x2A19, "Battery Level", GattCharacteristicProperties.Read | GattCharacteristicProperties.Notify, token);
+        AttachRead(level, "Battery Level", () => [100]);
+--- CHARACTERISTIC IMPLEMENTATION ---
+private async Task<GattLocalCharacteristic> CreateAsync(GattLocalService service, ushort uuid,
+        string label, GattCharacteristicProperties properties, CancellationToken token)
+    {
+        var parameters = new GattLocalCharacteristicParameters
+        {
+            CharacteristicProperties = properties,
+            ReadProtectionLevel = GattProtectionLevel.EncryptionRequired,
+            WriteProtectionLevel = GattProtectionLevel.EncryptionRequired
+        };
+        GattLocalCharacteristicResult result = await service.CreateCharacteristicAsync(HidSchema.Uuid(uuid), parameters).AsTask(token);
+        log.Write("gatt", $"{label} 0x{uuid:X4}={result.Error}");
+        if (result.Error != BluetoothError.Success || result.Characteristic is null)
+        { throw new InputBlockedException($"Falha em {label}: {result.Error}."); }
+        return result.Characteristic;
+    }
+
+    private async Task ReadableAsync(GattLocalService service, ushort uuid, string label, Func<byte[]> value, CancellationToken token)
+    {
+        GattLocalCharacteristic characteristic = await CreateAsync(service, uuid, label, GattCharacteristicProperties.Read, token);
+        AttachRead(characteristic, label, value);
+    }
+
+    private void AttachRead(GattLocalCharacteristic characteristic, string label, Func<byte[]> value)
+    {
+        TypedEventHandler<GattLocalCharacteristic, GattReadRequestedEventArgs> handler = async (_, args) =>
+        {
+            using var deferral = args.GetDeferral();
+            try
+            {
+                TrackSession(args.Session);
+                GattReadRequest? request = await args.GetRequestAsync();
+                if (request is null) { log.Write("read", $"{label}: request canceled"); return; }
+                // Input state belongs only to the selected host; other encrypted readers see neutral.
+                byte[] bytes = label == "Protocol Mode" ? [_hosts[args.Session.DeviceId.Id].Mode] :
+                    args.Session.DeviceId.Id != _selectedId && label is "keyboard" or "mouse" or "boot keyboard" or "boot mouse"
+                    ? label == "boot mouse" ? new byte[3] : HidSchema.Neutral(label.Contains("keyboard", StringComparison.Ordinal) ? HidSchema.KeyboardId : HidSchema.MouseId) : value();
+                log.Write("read", $"{label}; offset={request.Offset}; length={request.Length}; attributeBytes={bytes.Length}");
+                if (request.Offset > bytes.Length) { request.RespondWithProtocolError(0x07); return; }
+                // Long Report Map reads may arrive in multiple ATT read/blob requests.
+                byte[] response = bytes.AsSpan((int)request.Offset, Math.Min((int)request.Length, bytes.Length - (int)request.Offset)).ToArray();
+                request.RespondWithValue(CryptographicBuffer.CreateFromByteArray(response));
+                if (response.Length > 0 && _hosts.TryGetValue(args.Session.DeviceId.Id, out Host? host))
+                { if (label == "HID Information") { host.InfoRead = true; } if (label == "Report Map") { host.MapRead = true; } }
+                Publish();
+            }
+            catch (Exception error) { log.Error("read-error", error); }
+        };
+        characteristic.ReadRequested += handler;
+        _unhooks.Add(() => characteristic.ReadRequested -= handler);
+    }
+
+    private async Task<GattLocalCharacteristic> InputAsync(GattLocalService service, byte id, CancellationToken token)
+    {
+        string label = Kind(id);
+        GattLocalCharacteristic characteristic = await CreateAsync(service, 0x2A4D, label,
+            GattCharacteristicProperties.Read | GattCharacteristicProperties.Notify, token);
+        AttachRead(characteristic, label, () => id == HidSchema.KeyboardId ? _keyboardValue : _mouseValue);
+        var parameters = new GattLocalDescriptorParameters
+        {
+            ReadProtectionLevel = GattProtectionLevel.EncryptionRequired,
+            StaticValue = CryptographicBuffer.CreateFromByteArray([id, 1])
+        };
+        GattLocalDescriptorResult descriptor = await characteristic.CreateDescriptorAsync(HidSchema.Uuid(0x2908), parameters).AsTask(token);
+        log.Write("gatt", $"{label} Report Reference 0x2908 id={id} type=Input result={descriptor.Error}");
+        if (descriptor.Error != BluetoothError.Success)
+        { throw new InputBlockedException($"Falha no Report Reference de {label}: {descriptor.Error}."); }
+        characteristic.SubscribedClientsChanged += OnSubscriptions;
+        _unhooks.Add(() => characteristic.SubscribedClientsChanged -= OnSubscriptions);
+        return characteristic;
+    }
+
+    private async Task ControlPointAsync(GattLocalService service, CancellationToken token)
+    {
+        GattLocalCharacteristic characteristic = await CreateAsync(service, 0x2A4C, "HID Control Point",
+            GattCharacteristicProperties.WriteWithoutResponse, token);
+        TypedEventHandler<GattLocalCharacteristic, GattWriteRequestedEventArgs> handler = async (_, args) =>
+        {
+            using var deferral = args.GetDeferral();
+            try
+            {
+                TrackSession(args.Session);
+                GattWriteRequest? request = await args.GetRequestAsync();
+                if (request is null) { return; }
+                CryptographicBuffer.CopyToByteArray(request.Value, out byte[] bytes);
+                bool valid = request.Offset == 0 && bytes.Length == 1 && bytes[0] <= 1;
+                if (valid)
+                {
+                    _suspended = bytes[0] == 0;
+                    log.Write("hid", $"Control Point={(_suspended ? "Suspend" : "ExitSuspend")}");
+                    SetNeutralPending();
+                    Publish();
+                }
+                else { log.Write("hid", "Invalid Control Point write"); }
+                if (request.Option == GattWriteOption.WriteWithResponse)
+                {
+                    if (valid) { request.Respond(); } else { request.RespondWithProtocolError(0x0D); }
+                }
+            }
+            catch (Exception error) { log.Error("write-error", error); }
+        };
+        characteristic.WriteRequested += handler;
+        _unhooks.Add(() => characteristic.WriteRequested -= handler);
+    }
+
+    private async Task ProtocolAsync(GattLocalService service, CancellationToken token)
+    {
+        GattLocalCharacteristic mode = await CreateAsync(service, 0x2A4E, "Protocol Mode",
+            GattCharacteristicProperties.Read | GattCharacteristicProperties.WriteWithoutResponse, token);
+        AttachRead(mode, "Protocol Mode", () => [_protocolMode]);
+        AttachWrite(mode, "Protocol Mode", bytes =>
+        {
+            if (bytes.Length != 1 || bytes[0] > 1) { return false; }
+            return true;
+        });
+    }
+
+    private async Task<GattLocalCharacteristic> BootInputAsync(GattLocalService service, ushort uuid, string label, Func<byte[]> value, CancellationToken token)
+    {
+        var characteristic = await CreateAsync(service, uuid, label, GattCharacteristicProperties.Read | GattCharacteristicProperties.Notify, token);
+        AttachRead(characteristic, label, value);
+        characteristic.SubscribedClientsChanged += OnSubscriptions;
+        _unhooks.Add(() => characteristic.SubscribedClientsChanged -= OnSubscriptions);
+        return characteristic;
+    }
+
+    private async Task BootOutputAsync(GattLocalService service, CancellationToken token)
+    {
+        var characteristic = await CreateAsync(service, 0x2A32, "Boot Keyboard Output",
+            GattCharacteristicProperties.Read | GattCharacteristicProperties.Write | GattCharacteristicProperties.WriteWithoutResponse, token);
+        AttachRead(characteristic, "Boot Keyboard Output", () => [_leds]);
+        AttachWrite(characteristic, "Boot Keyboard Output", bytes =>
+        { if (bytes.Length != 1) { return false; } _leds = (byte)(bytes[0] & 0x1F); return true; });
+    }
+
+    private void AttachWrite(GattLocalCharacteristic characteristic, string label, Func<byte[], bool> apply)
+    {
+        TypedEventHandler<GattLocalCharacteristic, GattWriteRequestedEventArgs> handler = async (_, args) =>
+        {
+            using var deferral = args.GetDeferral();
+            try
+            {
+                TrackSession(args.Session);
+                var request = await args.GetRequestAsync(); if (request is null) { return; }
+                if (label == "Protocol Mode" && _hosts.TryGetValue(args.Session.DeviceId.Id, out Host? host)) { host.ModeWritten = true; }
+                CryptographicBuffer.CopyToByteArray(request.Value, out byte[] bytes);
+                bool valid = request.Offset == 0 && apply(bytes);
+                if (valid && label == "Protocol Mode" && _hosts.TryGetValue(args.Session.DeviceId.Id, out var protocolHost))
+                {
+                    protocolHost.Mode = bytes[0];
+                    if (_selectedId == args.Session.DeviceId.Id) { SetNeutralPending(); }
+                    log.Write("protocol", $"{protocolHost.Alias} Mode={(bytes[0] == 0 ? "boot" : "report")}");
+                }
+                log.Write("write", $"{label}; valid={valid}");
+                if (request.Option == GattWriteOption.WriteWithResponse)
+                { if (valid) { request.Respond(); } else { request.RespondWithProtocolError(0x0D); } }
+                Publish();
+            }
+            catch (Exception error) { log.Error("write-error", error); }
+        };
+        characteristic.WriteRequested += handler;
+        _unhooks.Add(() => characteristic.WriteRequested -= handler);
+    }
+
+    private GattLocalCharacteristic? KeyboardCharacteristic => _protocolMode == 0 ? _bootKeyboard : _keyboard;
+    private GattLocalCharacteristic? MouseCharacteristic => _protocolMode == 0 ? _bootMouse : _mouse;
+    private static byte[] BootMouse(byte[] report) => [report[0], unchecked((byte)(sbyte)Math.Clamp((int)System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(report.AsSpan(1)), -127, 127)), unchecked((byte)(sbyte)Math.Clamp((int)System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(report.AsSpan(3)), -127, 127))];
+
+    private void OnSubscriptions(GattLocalCharacteristic sender, object args)
+    {
+        try
+        {
+            foreach (GattSubscribedClient client in sender.SubscribedClients) { TrackSession(client.Session); }
+            log.Write("subscriptions", $"{(sender == _keyboard || sender == _bootKeyboard ? "keyboard" : "mouse")} raw={sender.SubscribedClients.Count}");
+            SetNeutralPending();
+            Publish();
+        }
+        catch (Exception error) { log.Error("subscription-error", error); }
+    }

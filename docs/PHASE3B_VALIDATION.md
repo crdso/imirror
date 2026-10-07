@@ -1,5 +1,7 @@
 # Validação local — Fase 3B
 
+Revalidação de conexão atual: [iOS Stable / Known Good](IOS_STABLE_HID_REVALIDATION.md). O registro abaixo é histórico; o schema estendido ABNT2 foi substituído pelo descriptor estável de 0x65.
+
 Data: **2026-10-06**. Resumo técnico sanitizado; logs brutos e screenshots locais não são publicados.
 
 | Verificação | Resultado |

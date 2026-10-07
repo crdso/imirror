@@ -7,12 +7,25 @@ internal static class HogpLifecycleProbe
     private sealed class Peripheral : IHogpPeripheral
     {
         public bool CanRecreateAfterStop { get; set; } = true;
-        public int Starts, Pairings, Disposes;
+        public int Starts, Pairings, Disposes, Pauses, Unpairs;
+        private bool _paused;
         public BluetoothStatus Status = new(BluetoothState.WaitingForPairing, "test", [], Advertising:true, RadioOn:true);
         public event Action<BluetoothStatus>? StatusChanged;
         public BluetoothStatus GetStatus() => Status;
         public Task StartAsync(CancellationToken token, int waitBluetoothSeconds = 0, bool enableRadio = false) { Starts++; return Task.CompletedTask; }
-        public void BeginPairing() { Pairings++; StatusChanged?.Invoke(Status); }
+        public void BeginPairing()
+        {
+            if (_paused && !CanRecreateAfterStop) { throw new InputBlockedException("Feche e reabra o iMirror"); }
+            _paused = false; Pairings++;
+            Status = Status with { State = BluetoothState.WaitingForPairing, Advertising = true }; StatusChanged?.Invoke(Status);
+        }
+        public Task StopServiceAsync()
+        {
+            if (!_paused) { Pauses++; _paused = true; Publish(BluetoothStatus.Stopped with { State = CanRecreateAfterStop ? BluetoothState.Stopped : BluetoothState.StopUnconfirmed }); }
+            return Task.CompletedTask;
+        }
+        public Task<BluetoothUnpairResult> UnpairHostAsync(string id, CancellationToken token)
+        { Unpairs++; return Task.FromResult(new BluetoothUnpairResult("Unpaired", true)); }
         public void Publish(BluetoothStatus status) { Status = status; StatusChanged?.Invoke(status); }
         public Task SelectHostAsync(string id) => Task.CompletedTask;
         public Task SendAsync(byte id, byte[] payload, CancellationToken token) => Task.CompletedTask;
@@ -51,18 +64,33 @@ internal static class HogpLifecycleProbe
         await using var controller = new BluetoothController(log, _ => { var p = new Peripheral(); instances.Add(p); return p; }, LeaseName);
         await controller.ConnectAsync();
         await Task.WhenAll(controller.StopAsync(), controller.StopAsync());
-        Require(instances[0].Disposes == 1 && controller.Status.State == BluetoothState.Stopped && !controller.Status.IsConnected);
+        Require(instances[0].Disposes == 0 && instances[0].Pauses == 1 && controller.Status.State == BluetoothState.Stopped && !controller.Status.IsConnected);
         await controller.ConnectAsync();
-        Require(instances.Count == 2 && controller.Status.ProviderGeneration == 2);
-        instances[1].CanRecreateAfterStop = false;
+        Require(instances.Count == 1 && instances[0].Starts == 1 && controller.Status.ProviderGeneration == 1);
+        instances[0].CanRecreateAfterStop = false;
         await controller.StopAsync(); await controller.StopAsync();
-        Require(controller.Status.State == BluetoothState.StopUnconfirmed && instances[1].Disposes == 1);
+        Require(controller.Status.State == BluetoothState.StopUnconfirmed && instances[0].Disposes == 0);
         using var lease = new Semaphore(1, 1, LeaseName);
         Require(!lease.WaitOne(0));
         await controller.ConnectAsync();
-        Require(instances.Count == 2 && controller.Status.State == BluetoothState.Error);
+        Require(instances.Count == 1 && instances[0].Disposes == 0 && controller.Status.State == BluetoothState.Error);
         await controller.DisconnectAsync();
         Require(lease.WaitOne(0)); lease.Release();
+    }
+    public static async Task UnpairSafety()
+    {
+        using var log = Log(); var peripheral = new Peripheral();
+        await using var controller = new BluetoothController(log, _ => peripheral, LeaseName);
+        await controller.ConnectAsync();
+        var host = new BluetoothHost("observed-session", "H1", "fixture", true, "GATT Active", true, true, true, true, true, true, true);
+        peripheral.Publish(PairingStatus.Create(true, true, [host], host.Id, true, true, 1, true, TimeSpan.Zero));
+        try { await controller.UnpairHostAsync("same-name-other-device"); throw new Exception("Unknown host allowed"); } catch(InputBlockedException) { }
+        peripheral.Publish(controller.Status with { Hosts = [host with { CanUnpair = false }] });
+        try { await controller.UnpairHostAsync(host.Id); throw new Exception("Unknown bond allowed"); } catch(InputBlockedException) { }
+        Require(peripheral.Unpairs == 0);
+        peripheral.Publish(controller.Status with { Hosts = [host] });
+        var result = await controller.UnpairHostAsync(host.Id);
+        Require(result.Status == "Unpaired" && peripheral.Unpairs == 1 && peripheral.Disposes == 0 && controller.Status.ProviderGeneration == 1);
     }
     public static async Task Reconnect()
     {

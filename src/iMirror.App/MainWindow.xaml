@@ -28,7 +28,7 @@
         <v:ControlView x:Name="ControlPage" Visibility="{Binding SelectedPage, Converter={StaticResource PageVisibility}, ConverterParameter=1}"/>
         <v:KeyboardView x:Name="KeyboardPage" Visibility="{Binding SelectedPage, Converter={StaticResource PageVisibility}, ConverterParameter=2}"/>
         <v:RecordingView Visibility="{Binding SelectedPage, Converter={StaticResource PageVisibility}, ConverterParameter=3}"/>
-        <v:SettingsView Visibility="{Binding SelectedPage, Converter={StaticResource PageVisibility}, ConverterParameter=4}"/>
+        <v:SettingsView x:Name="SettingsPage" Visibility="{Binding SelectedPage, Converter={StaticResource PageVisibility}, ConverterParameter=4}"/>
       </Grid>
       <Border Grid.ColumnSpan="2" Background="#C0101218" Visibility="{Binding DiagnosticsOpen, Converter={StaticResource BoolVisibility}}">
         <v:DiagnosticsView x:Name="DiagnosticsPanel" Margin="24" MaxWidth="1100" Height="430" VerticalAlignment="Center"/>

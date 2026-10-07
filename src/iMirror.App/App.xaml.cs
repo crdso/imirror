@@ -53,6 +53,7 @@ public partial class App : Application
                 _bluetoothLog, () => owned.ProcessId);
             MainWindow = new MainWindow(_viewModel);
             MainWindow.Show();
+            if (e.Args.Contains("--show-control", StringComparer.Ordinal)) { _viewModel.SelectedPage = 1; }
             if (e.Args.Contains("--start-bluetooth", StringComparer.Ordinal))
             {
                 _viewModel.SelectedPage = 1;
@@ -62,7 +63,7 @@ public partial class App : Application
             {
                 Dispatcher.BeginInvoke(new Action(() => _viewModel.AirPlayCommand.Execute(null)));
             }
-            _log.Write(LogLevel.Information, "App", "Janela pronta. PHASE 3 BLE TRANSPORT: PHYSICALLY VALIDATED; PHASE 3 INPUT: PHYSICALLY VALIDATED; PHASE 3 UX: UPDATED — PENDING USER VALIDATION.");
+            _log.Write(LogLevel.Information, "App", "Janela pronta. READY FOR STABLE IPHONE HID REVALIDATION; iOS-stable based on physically validated checkpoint 8262f344; current connection/reconnection pending physical validation.");
         }
         catch (Exception ex)
         {

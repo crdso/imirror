@@ -19,15 +19,13 @@ internal static class Program
             if (args.Contains("--native-associations")) { return await NativeAssociationsTest(); }
             if (args.Contains("--native-cursor"))
             { using var cursorLog=new BluetoothControlLog(Path.Combine("logs","phase3b-native-cursor.log"),echo:true); await NativeCaptureTest(cursorLog); return 0; }
-            await Test("Report Map upstream unchanged except required ABNT2 usage range", () => Check(() =>
+            await Test("iOS stable ReportMap matches known-good commit byte-for-byte and SHA256", () => Check(() =>
             {
-                var expected = BleHid.Core.HidDescriptors.ReportMapValue.ToList();
-                int logical = expected.FindIndex(index => index == 0x65);
-                Require(expected[logical-1] == 0x25); expected[logical-1] = 0x26; expected[logical] = 0x87; expected.Insert(logical+1,0);
-                int usage = expected.FindIndex(index => index == 0x65);
-                Require(expected[usage-1] == 0x29); expected[usage] = 0x87;
-                Require(HidSchema.ReportMap.SequenceEqual(expected));
-                Require(HidSchema.KeyboardState(0,[0x87])[2] == 0x87);
+                Require(HidSchema.ReportMap.SequenceEqual(BleHid.Core.HidDescriptors.ReportMapValue));
+                Require(HidSchema.ReportMap.Length == 113 && HidSchema.Profile == "iOS-stable");
+                Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(HidSchema.ReportMap)) == "3097B7140EDA569B37EECC11502A31AF653B444FFEDB923E0CC85F3CCB5C0A5D");
+                var copy = HidSchema.ReportMap; copy[0] = 0; Require(HidSchema.ReportMap[0] == 5);
+                Require(HidSchema.KeyboardState(0,[0x87])[2] == 0);
             }));
             await Test("Keyboard reserved byte and six usages without report ID", () => Check(() => Require(HidSchema.KeyboardState(2, [4,5]).SequenceEqual(new byte[] {2,0,4,5,0,0,0,0}))));
             await Test("Keyboard rollover and deduplication", () => Check(() => { Require(HidSchema.KeyboardState(0, [4,4]).Count(value => value == 4) == 1); Require(HidSchema.KeyboardState(0, [4,5,6,7,8,9,10]).Skip(2).All(value => value == 1)); }));
@@ -72,7 +70,7 @@ internal static class Program
                     Require(KeyboardLayout.Usage(0xC0,0x29,false,mode)==0x35);
                     Require(KeyboardLayout.Usage(0xDE,0x1A,false,mode)==0x2F);
                     Require(KeyboardLayout.Usage(0xBA,0x27,false,mode)==0x33);
-                    Require(KeyboardLayout.Usage(0xC1,0x73,false,mode)==0x87);
+                    Require(KeyboardLayout.Usage(0xC1,0x73,false,mode)==0);
                     Require(KeyboardLayout.Usage(0xE2,0x56,false,mode)==0x64);
                 }
                 var state = new KeyboardState(); state.Update(0xDE,true,0x2F); state.Update(0xDE,false,0x34); Require(state.Usages.Length==0);
@@ -89,8 +87,14 @@ internal static class Program
                     [new(0x2D)],[new(0x2D,2)],[new(0x2E)],[new(0x2E,2)],[new(0x1F,2)]
                 ];
                 Require(chars.Length==expected.Length);
-                for(int i=0;i<chars.Length;i++) { Require(KeyboardLayout.Compose(chars[i],KeyboardLayoutMode.PortugueseBrazilAbnt2).SequenceEqual(expected[i])); }
-                AssertReleases(KeyboardLayout.PrepareText(chars,KeyboardLayoutMode.PortugueseBrazilAbnt2));
+                for(int i=0;i<chars.Length;i++)
+                {
+                    if (chars[i] is '/' or '?')
+                    { try { KeyboardLayout.Compose(chars[i],KeyboardLayoutMode.PortugueseBrazilAbnt2); throw new Exception("Expected stable-profile limitation"); } catch(InputBlockedException) { } }
+                    else { Require(KeyboardLayout.Compose(chars[i],KeyboardLayoutMode.PortugueseBrazilAbnt2).SequenceEqual(expected[i])); }
+                }
+                AssertReleases(KeyboardLayout.PrepareText(chars.Replace("?", "").Replace("/", ""),KeyboardLayoutMode.PortugueseBrazilAbnt2));
+                try { KeyboardLayout.PrepareText("abc?",KeyboardLayoutMode.PortugueseBrazilAbnt2); throw new Exception("Expected atomic text rejection"); } catch(InputBlockedException) { }
             }));
             await Test("US punctuation physical usage modifiers and unsupported non-US text rejected", () => Check(() =>
             {
@@ -142,6 +146,10 @@ internal static class Program
             await Test("HOGP disconnect/reconnect keeps provider and selected host", HogpLifecycleProbe.Reconnect);
             await Test("Explicit HID reset recreates exactly once and shutdown releases", HogpLifecycleProbe.Reset);
             await Test("Stop waiting is idempotent and retains lease when native stop is unconfirmed", HogpLifecycleProbe.StopWaiting);
+            await Test("EnsureAdvertising Aborted -> bounded retry possible on same provider", AdvertisingRecoveryProbe.Aborted);
+            await Test("EnsureAdvertising exception -> pending reset, 1/2/5s backoff and finite attempts", AdvertisingRecoveryProbe.Exceptions);
+            await Test("Missing Started -> watchdog; shutdown cancels retry; drop reuses advertising action", AdvertisingRecoveryProbe.WatchdogAndDrop);
+            await Test("Unpair targets only an exact observed paired HID session and retains provider", HogpLifecycleProbe.UnpairSafety);
             await Test("Unconfirmed native advertising stop blocks duplicate provider until exit", HogpLifecycleProbe.UnconfirmedStop);
             await Test("Windows BLE link/bond cannot promote HID connection or select input target", () => Check(() =>
             {

@@ -32,6 +32,8 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private BluetoothHost? _selectedHost;
     private int _appearanceIndex;
     private bool _bluetoothStarted;
+    private CancellationTokenSource? _bluetoothStart;
+    private bool _bluetoothStopping;
     private readonly CancellationTokenSource _shutdown = new();
     private string _notice = "Inicie AirPlay e selecione iMirror - Windows no Espelhamento de Tela do iPhone.";
 
@@ -69,11 +71,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }, ex => { _log.Write(LogLevel.Error, "AirPlay", ex.ToString()); Notice = "Não foi possível alterar AirPlay. Consulte os logs."; }, dispatcher);
         BluetoothCommand = new AsyncRelayCommand(async () =>
         {
-            await StopControlAsync();
-            await Task.Run(() => _bluetooth.ConnectAsync(_shutdown.Token));
-            _bluetoothStarted = _bluetooth.Status.State is not (BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.Stopped);
-            Notice = _bluetooth.Status.Message;
-            RefreshControl();
+            if (!CanConnectBluetooth) { return; }
+            using var start = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+            _bluetoothStart = start; RefreshControl();
+            try
+            {
+                await StopControlAsync();
+                await Task.Run(() => _bluetooth.ConnectAsync(start.Token));
+                _bluetoothStarted = IsBluetoothActive(_bluetooth.Status);
+                Notice = _bluetooth.Status.Message;
+            }
+            finally { _bluetoothStart = null; RefreshControl(); }
         }, BluetoothError, dispatcher);
         ControlCommand = new AsyncRelayCommand(async () =>
         {
@@ -87,11 +95,31 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         }, BluetoothError, dispatcher);
         RestartHidCommand = new AsyncRelayCommand(async () =>
         {
+            if (_bluetoothStopping) { return; }
             if (MessageBox.Show("Use apenas para recuperar falhas de pareamento. Reiniciar o serviço HID agora?\nSe o Windows não confirmar a parada, será necessário fechar e reabrir o iMirror para evitar outro provider ativo.", "iMirror — recuperação HID", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) { return; }
             await StopControlAsync();
             await Task.Run(() => _bluetooth.RestartAsync(_shutdown.Token));
             _bluetoothStarted = _bluetooth.Status.State is not (BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.Stopped);
             RefreshControl();
+        }, BluetoothError, dispatcher);
+        StopBluetoothCommand = new AsyncRelayCommand(async () =>
+        {
+            if (!CanStopBluetooth) { return; }
+            _bluetoothStopping = true; RefreshControl();
+            try
+            {
+                _bluetoothStart?.Cancel();
+                await StopControlAsync();
+                await BluetoothCommand.ExecutionTask;
+                await RestartHidCommand.ExecutionTask;
+                await ControlCommand.ExecutionTask;
+                // Activation can still be awaiting native focus/release when Stop is clicked.
+                await StopControlAsync();
+                await Task.Run(_bluetooth.StopAsync);
+                _bluetoothStarted = false;
+                Notice = _bluetooth.Status.Message;
+            }
+            finally { _bluetoothStopping = false; RefreshControl(); }
         }, BluetoothError, dispatcher);
         FullscreenCommand = new RelayCommand(ToggleFullscreen);
         InitializePresentation();
@@ -108,10 +136,17 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private async Task ChangeHostAsync(string id)
     { try { await StopControlAsync(); await Task.Run(() => _bluetooth.SelectHostAsync(id)); } catch (Exception error) { BluetoothError(error); } }
     public string BluetoothButtonText => Bluetooth.State == BluetoothState.Starting ? "HID inicializando..." : "Conectar Bluetooth";
-    public string HidStatus => $"Keyboard: {(Bluetooth.KeyboardConnected ? "conectado" : "aguardando")}  |  Mouse: {(Bluetooth.MouseConnected ? "conectado" : "aguardando")}  |  {(Bluetooth.ProtocolMode == 1 ? "Report mode" : "Boot mode: sem wheel")}";
+    private static bool IsBluetoothActive(BluetoothStatus status) => status.State is not
+        (BluetoothState.Stopped or BluetoothState.Disconnected or BluetoothState.Error or BluetoothState.RadioOff or BluetoothState.StopUnconfirmed);
+    public bool CanConnectBluetooth => !_bluetoothStopping && !_bluetoothStarted && _bluetoothStart is null &&
+        !IsBluetoothActive(Bluetooth) && Bluetooth.State != BluetoothState.StopUnconfirmed;
+    public bool CanStopBluetooth => !_bluetoothStopping && (_bluetoothStart is not null || _bluetoothStarted || IsBluetoothActive(Bluetooth));
+    public string HidStatus => Bluetooth.State == BluetoothState.Stopped ? "Mouse e teclado Bluetooth desativados" :
+        Bluetooth.State == BluetoothState.StopUnconfirmed ? "Envio HID bloqueado · parada do anúncio não confirmada" :
+        $"Keyboard: {(Bluetooth.KeyboardConnected ? "conectado" : "aguardando")}  |  Mouse: {(Bluetooth.MouseConnected ? "conectado" : "aguardando")}  |  {(Bluetooth.ProtocolMode == 1 ? "Report mode" : "Boot mode: sem wheel")}";
     public string HostDiagnostics => SelectedHost is { } host ? $"HID Information: {host.HidInformationRead}; Report Map: {host.ReportMapRead}; Protocol Mode escrito: {host.ProtocolModeWritten}; Bond: {host.Bonded}; Link: {host.ConnectionStatus}" : "Nenhum host HID nesta sessão. O nome anunciado é o nome Bluetooth deste PC.";
     public bool ControlActive => _capture?.IsActive == true;
-    public bool CanControl => ControlActive || Bluetooth.MouseConnected && AirPlay.State == AirPlayState.Streaming && AirPlay.Width > 0 && AirPlay.Height > 0;
+    public bool CanControl => !_bluetoothStopping && (ControlActive || Bluetooth.MouseConnected && AirPlay.State == AirPlayState.Streaming && AirPlay.Width > 0 && AirPlay.Height > 0);
     public string ControlButtonText => ControlActive ? "Desativar controle" : "Ativar controle";
     public string ControlStatus => ControlActive ? "Controle ativo — ESC ou Ctrl+Alt+Q para parar" : "Mouse relativo — captura somente na janela de vídeo em foco";
     public bool CaptureKeyboard
@@ -142,6 +177,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public ReadOnlyObservableCollection<LogEntry> AllLogs { get; }
     public AsyncRelayCommand AirPlayCommand { get; }
     public AsyncRelayCommand BluetoothCommand { get; }
+    public AsyncRelayCommand StopBluetoothCommand { get; }
     public AsyncRelayCommand ControlCommand { get; }
     public AsyncRelayCommand RestartHidCommand { get; }
     public RelayCommand FullscreenCommand { get; }
@@ -183,6 +219,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
         await _shutdown.CancelAsync();
         await StopControlAsync();
         await BluetoothCommand.ExecutionTask;
+        await StopBluetoothCommand.ExecutionTask;
         await RestartHidCommand.ExecutionTask;
         await ControlCommand.ExecutionTask;
         // An activation may have been awaiting native startup when close was requested.
@@ -211,7 +248,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     private void OnCaptureStopped(string reason) => Dispatch(() => { Notice = $"Controle parado: {reason}. Input devolvido ao Windows."; RefreshControl(); });
     private void OnPanelRequested() => Dispatch(() => PanelRequested?.Invoke());
     private void RefreshControl()
-    { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanChangeAppearance), nameof(BluetoothSummary), nameof(ControlSummary) }) { OnPropertyChanged(name); } }
+    { foreach (var name in new[] { nameof(ControlActive), nameof(CanControl), nameof(ControlButtonText), nameof(ControlStatus), nameof(BluetoothButtonText), nameof(CanConnectBluetooth), nameof(CanStopBluetooth), nameof(CanChangeAppearance), nameof(BluetoothSummary), nameof(ControlSummary) }) { OnPropertyChanged(name); } }
     private void Dispatch(Action action)
     { if (_disposed || _dispatcher.HasShutdownStarted) { return; } if (_dispatcher.CheckAccess()) { action(); } else { _dispatcher.BeginInvoke(action); } }
     private void OnPowerMode(object sender, PowerModeChangedEventArgs args)

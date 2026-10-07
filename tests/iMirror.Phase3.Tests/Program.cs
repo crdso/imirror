@@ -15,6 +15,7 @@ internal static class Program
         {
             if (args.Contains("--native")) { return await NativeTest(); }
             if (args.Contains("--native-lifetime")) { return await NativeLifetimeTest(); }
+            if (args.Contains("--native-stop-waiting")) { return await NativeStopWaitingTest(); }
             if (args.Contains("--native-associations")) { return await NativeAssociationsTest(); }
             if (args.Contains("--native-cursor"))
             { using var cursorLog=new BluetoothControlLog(Path.Combine("logs","phase3b-native-cursor.log"),echo:true); await NativeCaptureTest(cursorLog); return 0; }
@@ -140,6 +141,7 @@ internal static class Program
             await Test("HOGP concurrent Connect reuses one provider; timeout retains generation", HogpLifecycleProbe.Connect);
             await Test("HOGP disconnect/reconnect keeps provider and selected host", HogpLifecycleProbe.Reconnect);
             await Test("Explicit HID reset recreates exactly once and shutdown releases", HogpLifecycleProbe.Reset);
+            await Test("Stop waiting is idempotent and retains lease when native stop is unconfirmed", HogpLifecycleProbe.StopWaiting);
             await Test("Unconfirmed native advertising stop blocks duplicate provider until exit", HogpLifecycleProbe.UnconfirmedStop);
             await Test("Windows BLE link/bond cannot promote HID connection or select input target", () => Check(() =>
             {
@@ -235,6 +237,30 @@ internal static class Program
             }
             else { Require(controller.Status.ProviderGeneration == generation + 1); log.Write("native-validation", "PASS: native stop confirmed; one explicit reset only"); }
         }
+        return 0;
+    }
+    private static async Task<int> NativeStopWaitingTest()
+    {
+        using var log = new BluetoothControlLog(Path.Combine("logs", "bluetooth-native-stop-waiting.log"), echo:true);
+        await using var controller = new BluetoothController(log);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        await controller.ConnectAsync(timeout.Token);
+        Require(controller.Status.Advertising);
+        int generation = controller.Status.ProviderGeneration;
+        await controller.StopAsync();
+        Require(controller.Status.State is BluetoothState.Stopped or BluetoothState.StopUnconfirmed);
+        Require(!controller.Status.IsConnected && controller.Status.RadioOn);
+        var result = controller.Status.State;
+        await controller.StopAsync();
+        Require(controller.Status.State == result && controller.Status.ProviderGeneration == generation);
+        if (result == BluetoothState.StopUnconfirmed)
+        {
+            using var lease = new Semaphore(1, 1, "Local\\iMirror.BleHidProbe.Instance");
+            Require(!lease.WaitOne(0));
+            log.Write("native-validation", "PASS: stop requested; native termination unconfirmed; input blocked; lease retained; no second provider; reopen required");
+        }
+        else { log.Write("native-validation", "PASS: native stop confirmed; waiting ended; repeated stop harmless"); }
+        log.Write("native-validation", "No mouse/key input, pairing reset, radio toggle or AirPlay change performed; physical connection not validated");
         return 0;
     }
     private static async Task<int> NativeAssociationsTest()

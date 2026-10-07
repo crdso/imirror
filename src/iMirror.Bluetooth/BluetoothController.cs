@@ -49,6 +49,11 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
             _peripheral.BeginPairing();
             Set(_peripheral.GetStatus());
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            await CleanupAsync(); SetStoppedStatus();
+            log.Write("pairing", "Startup canceled by user; native cleanup requested");
+        }
         catch (Exception error)
         {
             log.Error("connect-error", error); await CleanupAsync();
@@ -64,6 +69,30 @@ public sealed class BluetoothController(BluetoothControlLog log, Func<BluetoothC
         try { await CleanupAsync(); ReleaseInstance(); _windowsObserver?.Dispose(); _windowsObserver = null; Set(BluetoothStatus.Stopped with { State = BluetoothState.Disconnected, Message = "Desconectado — reconecte em Ajustes > Bluetooth se necessário" }); }
         finally { _lifecycle.Release(); }
     }
+
+    // User stop keeps the lease if native advertising termination is unconfirmed.
+    public async Task StopAsync()
+    {
+        await _lifecycle.WaitAsync();
+        try
+        {
+            Set(new(BluetoothState.Stopping, "Parando Bluetooth...", [], RadioOn: Status.RadioOn));
+            log.Write("pairing-stop", "Explicit user stop; AirPlay and system radio unchanged");
+            await CleanupAsync();
+            _windowsObserver?.Dispose(); _windowsObserver = null;
+            SetStoppedStatus();
+        }
+        finally { _lifecycle.Release(); }
+    }
+
+    private void SetStoppedStatus() => Set(BluetoothStatus.Stopped with
+    {
+        State = _recreationBlocked ? BluetoothState.StopUnconfirmed : BluetoothState.Stopped,
+        RadioOn = Status.RadioOn,
+        Message = _recreationBlocked
+            ? "Parada solicitada; o Windows não confirmou o fim do anúncio. Feche e reabra o iMirror antes de conectar novamente."
+            : "Bluetooth parado — clique em Conectar Bluetooth quando quiser."
+    });
 
     private async Task CleanupAsync()
     {

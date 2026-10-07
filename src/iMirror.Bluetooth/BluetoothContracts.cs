@@ -1,6 +1,6 @@
 namespace iMirror.Bluetooth;
 
-public enum BluetoothState { Stopped, RadioOff, Starting, WaitingForPairing, BondedWithoutHid, HidConnected, Disconnected, Error, Advertising, GattDetected, KeyboardConnected, MouseConnected, HidIncomplete, ReconnectionRequired }
+public enum BluetoothState { Stopped, RadioOff, Starting, WaitingForPairing, BondedWithoutHid, HidConnected, Disconnected, Error, Advertising, GattDetected, KeyboardConnected, MouseConnected, HidIncomplete, ReconnectionRequired, Stopping, StopUnconfirmed }
 public sealed record BluetoothHost(string Id, string Alias, string DisplayName, bool Bonded,
     string ConnectionStatus, bool KeyboardSubscribed, bool MouseSubscribed,
     bool HidInformationRead, bool ReportMapRead, bool ProtocolModeWritten, bool GattActive = false);
@@ -23,6 +23,7 @@ public interface IBluetoothController
     event Action<BluetoothStatus>? StatusChanged;
     Task ConnectAsync(CancellationToken token = default);
     Task DisconnectAsync();
+    Task StopAsync() => DisconnectAsync();
     Task RestartAsync(CancellationToken token = default) => throw new InputBlockedException("Reset HID não disponível.");
     Task SelectHostAsync(string id);
     Task SetAppearanceAsync(ushort? appearance);

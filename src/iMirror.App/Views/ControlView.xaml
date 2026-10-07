@@ -6,7 +6,9 @@
       <StackPanel>
         <TextBlock Text="Conexão Bluetooth" Style="{StaticResource CardTitle}"/>
         <TextBlock Text="{Binding BluetoothSummary}" FontSize="16"/>
-        <WrapPanel Margin="0,12,0,16"><Button x:Name="BluetoothButton" Content="{Binding BluetoothButtonText}" Command="{Binding BluetoothCommand}"/><Button Content="Problemas para parear?" Command="{Binding PairingHelpCommand}" Style="{StaticResource GhostButton}" Margin="8,0,0,0"/></WrapPanel>
+        <WrapPanel Margin="0,12,0,16"><Button x:Name="BluetoothButton" Content="{Binding BluetoothButtonText}" Command="{Binding BluetoothCommand}" IsEnabled="{Binding CanConnectBluetooth}"/>
+          <Button x:Name="StopBluetoothButton" Content="Parar Bluetooth" Command="{Binding StopBluetoothCommand}" IsEnabled="{Binding CanStopBluetooth}" Margin="8,0,0,0"/>
+          <Button Content="Problemas para parear?" Command="{Binding PairingHelpCommand}" Style="{StaticResource GhostButton}" Margin="8,0,0,0"/></WrapPanel>
         <TextBlock Text="{Binding PairingGuidance}" Style="{StaticResource Caption}" Margin="0,0,0,16"/>
         <TextBlock Text="Etapas do pareamento" FontWeight="SemiBold" Margin="0,0,0,8"/>
         <TextBlock Text="{Binding PairingSteps}" LineHeight="23" Style="{StaticResource Caption}"/>

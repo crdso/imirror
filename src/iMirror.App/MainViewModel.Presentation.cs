@@ -24,7 +24,7 @@ public sealed partial class MainViewModel
         BluetoothState.Starting => "HID inicializando",
         BluetoothState.RadioOff => "Bluetooth desligado",
         BluetoothState.Error => "Erro no Bluetooth · confira Diagnóstico",
-        BluetoothState.Stopped => "HID não iniciado",
+        BluetoothState.Stopped => Bluetooth.Message,
         BluetoothState.WaitingForPairing when Bluetooth.PairingTimedOut => "Sem resposta HID após 30 s · anúncio mantido",
         _ => Bluetooth.Message
     };
@@ -39,7 +39,7 @@ public sealed partial class MainViewModel
                 Step(host?.ReportMapRead == true, "Report Map"), Step(Bluetooth.KeyboardConnected, "Keyboard · subscription"), Step(Bluetooth.MouseConnected, "Mouse · subscription"));
         }
     }
-    public string PairingGuidance => Bluetooth.State == BluetoothState.Error ? Bluetooth.Message : Bluetooth.PairingTimedOut ? Bluetooth.DiagnosticHost?.GattActive == true ?
+    public string PairingGuidance => Bluetooth.State is BluetoothState.Error or BluetoothState.Stopped or BluetoothState.Stopping or BluetoothState.StopUnconfirmed ? Bluetooth.Message : Bluetooth.PairingTimedOut ? Bluetooth.DiagnosticHost?.GattActive == true ?
         "Pareamento detectado, mas o iPhone não ativou Mouse/Keyboard HID. O serviço continua disponível." :
         Bluetooth.WindowsObservation?.BleConnected == true ?
         "O Windows detectou um vínculo BLE, mas o iMirror não recebeu atividade HID. Pode haver falha antes da leitura criptografada ou cache antigo; a causa ainda não foi confirmada." :

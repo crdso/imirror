@@ -32,6 +32,7 @@ public partial class MainWindow : Window
         RegisterName("AirPlayButton", MirrorPage.AirPlayButton);
         RegisterName("FullscreenButton", MirrorPage.FullscreenButton);
         RegisterName("BluetoothButton", ControlPage.BluetoothButton);
+        RegisterName("StopBluetoothButton", ControlPage.StopBluetoothButton);
         RegisterName("ControlButton", ControlPage.ControlButton);
         RegisterName("CursorSpeedSlider", ControlPage.CursorSpeedSlider);
         RegisterName("KeyboardLayoutSelector", KeyboardPage.KeyboardLayoutSelector);

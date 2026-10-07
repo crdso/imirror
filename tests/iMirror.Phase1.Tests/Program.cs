@@ -48,6 +48,7 @@ internal static class Program
             Test("Geometria, DPI, debounce, focus e ICO multi-resolução", () => FinalPolishProbe.CheckGeometryAndBranding());
             Test("Renderer nativo: HWND próprio, ícone, aspect e recuperação do painel", () => FinalPolishProbe.CheckRenderer(args[0]));
             Test("UI BLE exige subscriber, restringe ativação e reflete desconexão", () => CheckBluetoothUi(args[0]));
+            Test("Parar Bluetooth cancela inicialização sem parar AirPlay", () => CheckStopDuringBluetoothStartup(args[0]));
             Test("Botão AirPlay diagnostica a instalação real sem bloquear a UI", () => CheckAirPlayButton(args[0]));
             Test("Executável abre e encerra sem erro", () => CheckExecutable(args));
             Console.WriteLine($"PASS: {_passed} grupos de verificação. Evidências: {args[0]}");
@@ -298,6 +299,9 @@ internal static class Program
         {
             window.Show(); Pump();
             var control = (Button)window.FindName("ControlButton");
+            var connect = (Button)window.FindName("BluetoothButton");
+            var stopBluetooth = (Button)window.FindName("StopBluetoothButton");
+            Assert(connect.IsEnabled && !stopBluetooth.IsEnabled, "Bluetooth idle actions incorrect.");
             var speed=(Slider)window.FindName("CursorSpeedSlider"); var layouts=(ComboBox)window.FindName("KeyboardLayoutSelector");
             Assert(speed.Minimum==0.25 && speed.Maximum==3 && model.CursorSpeed==1 && layouts.Items.Count==3,"UX defaults or layout choices incorrect.");
             speed.Value=0.25; Pump(); Assert(model.CursorSpeed==0.25,"Speed binding failed.");
@@ -310,7 +314,20 @@ internal static class Program
             Pump(); Assert(!model.Bluetooth.IsConnected && model.BluetoothButtonText == "Conectar Bluetooth","Advertising mistaken for HID success.");
             model.BluetoothCommand.Execute(null);
             while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
-            Assert(bluetooth.Connects == 2 && bluetooth.Disconnects == 0,"Repeated pairing must not disconnect HOGP.");
+            Pump();
+            Assert(bluetooth.Connects == 1 && bluetooth.Disconnects == 0 && !connect.IsEnabled && stopBluetooth.IsEnabled,"Waiting must expose Stop instead of renewing pairing through Connect.");
+            receiver.Stream(); Pump();
+            model.StopBluetoothCommand.Execute(null);
+            while(!model.StopBluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+            Pump();
+            Assert(bluetooth.Stops == 1 && receiver.IsRunning && model.Bluetooth.State == BluetoothState.Stopped && connect.IsEnabled && !stopBluetooth.IsEnabled, "Stop waiting must stop HID, preserve AirPlay and allow deliberate reconnect.");
+            model.StopBluetoothCommand.Execute(null);
+            while(!model.StopBluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+            Assert(bluetooth.Stops == 1, "Repeated stop must be harmless.");
+            model.AirPlayCommand.Execute(null);
+            while(!model.AirPlayCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+            model.BluetoothCommand.Execute(null);
+            while(!model.BluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
             bluetooth.Publish(true,false); Pump();
             Assert(!model.CanControl && model.Bluetooth.KeyboardConnected && !model.Bluetooth.MouseConnected,"Keyboard-only status incorrect.");
             bluetooth.Publish(true,true); Pump();
@@ -331,6 +348,11 @@ internal static class Program
             Assert(model.BluetoothSummary.Contains("Sem resposta HID após 30 s"), "Timeout remains visibly waiting instead of explaining missing HID response.");
             model.SelectedPage = 1; Pump();
             SavePreview(window,Path.Combine(directory,"bluetooth-timeout-feedback.png"));
+            bluetooth.StopUnconfirmed = true;
+            model.StopBluetoothCommand.Execute(null);
+            while(!model.StopBluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+            Pump();
+            Assert(!connect.IsEnabled && !stopBluetooth.IsEnabled && model.PairingGuidance.Contains("Feche e reabra"), "Unconfirmed native stop must remain visible and block another provider.");
         }
         finally
         {
@@ -338,10 +360,43 @@ internal static class Program
             Assert(bluetooth.Disconnects>0,"UI shutdown omitted Bluetooth cleanup.");
         }
     }
+    private static void CheckStopDuringBluetoothStartup(string directory)
+    {
+        using var log = new FileDiagnosticLog(Path.Combine(directory, "bluetooth-stop-startup"));
+        var receiver = new MissingReceiver(); receiver.Stream();
+        var bluetooth = new FakeBluetooth { HoldStartup = true };
+        using var model = new MainViewModel(log, receiver, bluetooth, Dispatcher.CurrentDispatcher, log.FilePath);
+        model.BluetoothCommand.Execute(null);
+        Assert(model.CanStopBluetooth && !model.CanConnectBluetooth, "Stop must be available while native startup is pending.");
+        model.StopBluetoothCommand.Execute(null);
+        model.BluetoothCommand.Execute(null);
+        var timeout = Stopwatch.StartNew();
+        while (!model.StopBluetoothCommand.ExecutionTask.IsCompleted && timeout.Elapsed < TimeSpan.FromSeconds(5)) { Pump(); Thread.Sleep(10); }
+        Assert(model.StopBluetoothCommand.ExecutionTask.IsCompleted, "Stop did not cancel pending startup.");
+        model.StopBluetoothCommand.ExecutionTask.GetAwaiter().GetResult(); Pump();
+        Assert(bluetooth.Connects == 1 && bluetooth.Stops == 1 && receiver.IsRunning && model.CanConnectBluetooth && !model.CanStopBluetooth,
+            "Startup cancellation must stop only Bluetooth, without another Connect racing it.");
+        bluetooth.Publish(true, true); Pump();
+        Assert(model.CanControl, "Connected HID/stream must allow control before stop.");
+        var stopGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bluetooth.StopCompletion = stopGate.Task;
+        model.StopBluetoothCommand.Execute(null);
+        Assert(!model.CanControl && !model.CanConnectBluetooth && !model.StopBluetoothCommand.CanExecute(null),
+            "Native stop in progress must block another activation/connect/stop.");
+        stopGate.SetResult();
+        while(!model.StopBluetoothCommand.ExecutionTask.IsCompleted) { Pump(); Thread.Sleep(10); }
+        Assert(receiver.IsRunning && !model.CanControl, "Stop must leave AirPlay running and input disabled.");
+        var shutdown = model.ShutdownAsync();
+        while(!shutdown.IsCompleted) { Pump(); Thread.Sleep(10); }
+        shutdown.GetAwaiter().GetResult();
+    }
     private sealed class FakeBluetooth : IBluetoothController
     {
         public BluetoothStatus Status { get; private set; } = BluetoothStatus.Stopped;
-        public int Disconnects, Connects;
+        public int Disconnects, Connects, Stops;
+        public bool StopUnconfirmed;
+        public bool HoldStartup;
+        public Task? StopCompletion;
         public event Action<BluetoothStatus>? StatusChanged;
         public void Publish(bool keyboard,bool mouse)
         {
@@ -355,8 +410,21 @@ internal static class Program
                 WindowsObservation:new(true,[new("W1","Test iPhone","BLE",true,true)]));
             StatusChanged?.Invoke(Status);
         }
-        public Task ConnectAsync(CancellationToken token=default) { Connects++; Status=new(BluetoothState.WaitingForPairing,"Aguardando pareamento",[]); StatusChanged?.Invoke(Status); return Task.CompletedTask; }
+        public async Task ConnectAsync(CancellationToken token=default)
+        {
+            Connects++;
+            Status=new(HoldStartup ? BluetoothState.Starting : BluetoothState.WaitingForPairing,"Aguardando pareamento",[]); StatusChanged?.Invoke(Status);
+            if (HoldStartup) { await Task.Delay(Timeout.Infinite, token); }
+        }
         public Task DisconnectAsync() { Disconnects++; Publish(false,false); return Task.CompletedTask; }
+        public async Task StopAsync()
+        {
+            Stops++; if (StopCompletion is not null) { await StopCompletion; }
+            Status = BluetoothStatus.Stopped with
+            { State = StopUnconfirmed ? BluetoothState.StopUnconfirmed : BluetoothState.Stopped,
+              Message = StopUnconfirmed ? "Feche e reabra o iMirror." : "Bluetooth parado." };
+            StatusChanged?.Invoke(Status);
+        }
         public Task SelectHostAsync(string id)=>Task.CompletedTask;
         public Task SetAppearanceAsync(ushort? appearance)=>Task.CompletedTask;
         public Task SendMouseAsync(byte buttons,int dx,int dy,int wheel,CancellationToken token)=>throw new InvalidOperationException("Test must not send input");

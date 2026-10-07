@@ -45,6 +45,25 @@ internal static class HogpLifecycleProbe
         instances[0].Publish(timedOut);
         Require(controller.Status.PairingTimedOut && instances[0].Disposes == 0 && controller.Status.ProviderGeneration == 1);
     }
+    public static async Task StopWaiting()
+    {
+        using var log = Log(); var instances = new List<Peripheral>();
+        await using var controller = new BluetoothController(log, _ => { var p = new Peripheral(); instances.Add(p); return p; }, LeaseName);
+        await controller.ConnectAsync();
+        await Task.WhenAll(controller.StopAsync(), controller.StopAsync());
+        Require(instances[0].Disposes == 1 && controller.Status.State == BluetoothState.Stopped && !controller.Status.IsConnected);
+        await controller.ConnectAsync();
+        Require(instances.Count == 2 && controller.Status.ProviderGeneration == 2);
+        instances[1].CanRecreateAfterStop = false;
+        await controller.StopAsync(); await controller.StopAsync();
+        Require(controller.Status.State == BluetoothState.StopUnconfirmed && instances[1].Disposes == 1);
+        using var lease = new Semaphore(1, 1, LeaseName);
+        Require(!lease.WaitOne(0));
+        await controller.ConnectAsync();
+        Require(instances.Count == 2 && controller.Status.State == BluetoothState.Error);
+        await controller.DisconnectAsync();
+        Require(lease.WaitOne(0)); lease.Release();
+    }
     public static async Task Reconnect()
     {
         using var log = Log(); var p = new Peripheral();

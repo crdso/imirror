@@ -68,6 +68,8 @@ O filtro normal preserva eventos relevantes; **Verbose** mostra detalhes nativos
 
 ## Desenvolvimento e build
 
+**Reconexão Bluetooth em investigação:** a página Controle agora mostra vínculos Classic/BLE conhecidos pelo Windows separadamente das etapas HID. Um dispositivo marcado conectado no sistema não habilita controle sem subscriptions. Veja [evidências e próximo teste físico](docs/BLUETOOTH_CONNECTION_INVESTIGATION.md); a tentativa atual ainda não está aprovada.
+
 SDK .NET **10.0.401** conforme global.json; Git; Windows. Restore só usa pacotes Microsoft da fonte oficial configurada. O SDK local é mantido em .tools/dotnet. O runtime nativo local foi reduzido; **recompilar WPF não exige MSYS2 completo**.
 
 ~~~powershell

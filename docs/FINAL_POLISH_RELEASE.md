@@ -1,5 +1,7 @@
 # Release do polimento final
 
+Registro histórico do código `a952834`. Os pacotes locais foram atualizados depois; hashes atuais e diagnóstico da reconexão estão em [BLUETOOTH_CONNECTION_INVESTIGATION.md](BLUETOOTH_CONNECTION_INVESTIGATION.md).
+
 Data: 2026-10-07. Base anterior: `8635a8a`; código publicado: `a952834`. Código e documentação versionados; EXE, ZIP e evidências brutas permanecem locais, ignorados pelo Git.
 
 ## Pacotes

@@ -44,3 +44,30 @@ Reporte etapas, queda ou estabilidade nos 10 minutos e reconexão com geração 
 `logs/bluetooth-control.log`: profile/hash/length, callbacks reais, geração, advertising e saúde periódica; sem teclas/payloads/MACs. `bluetooth-hid-stage.json` guarda apenas timestamp, geração local e booleanos. No coletor nativo opcional existente, 0x13 gera `REMOTE_TERMINATION`, elapsed desde LE ConnectionComplete quando observado; links anteriores à coleta ficam unknown. Snapshot recente/stale e correlação GATT/link não comprovada são explícitos: a captura cobre todo o rádio. Nenhuma causa de adaptador/ação do usuário é inventada; nenhuma nova captura foi iniciada nesta entrega.
 
 UI, branding, cursor, modo foco, janela externa/redimensionamento e empacotamento preservados. UxPlay 1.73.7, GStreamer 1.28.7, H.265, renderer, portas e configs preservados. Nenhuma mudança automática de firewall, Bonjour, WSL, Wi-Fi, driver, bond ou rádio.
+
+## Validação da entrega — 2026-10-07
+
+Código dos pacotes: `76444a63fd68a0fa201ac7e3428507e6069d15a2` — `fix(bluetooth): restore validated iOS HOGP compatibility`.
+
+| Verificação local | Resultado |
+| --- | --- |
+| Debug / Release | 0 warnings, 0 errors em ambos; rebuild Debug final limpo |
+| Suites por configuração | 66/66 grupos: UI 12, AirPlay 10, BLE/input 44 |
+| HCI/BIP offline | 40/40 fixtures; nenhuma captura nativa iniciada |
+| Freeze de schema | 3/3 grupos: baseline aceito, mapa/banco alterados rejeitados |
+| Remote termination | 4/4 grupos: elapsed conhecido/unknown, snapshot stale, privacidade e reason preservado |
+| Scripts acima em Windows PowerShell 5 | PASS |
+| Probe isolado | 11/11 self-tests, sem acesso Bluetooth |
+| Segurança de rede | 6/6 fixtures, sem mudanças reais de rede |
+| GStreamer/cursor/hooks Win32 | PASS; janela real, foco, release e shutdown; HID fake |
+| Pacotes FDD / Portable | PASS: execução direta, ícones SMALL/BIG/Shell, janela dentro da WorkArea e exit 0 |
+| Runtime empacotado | 142/142 hashes por variante; versões, HEVC, renderer e porta preservados |
+
+O smoke isolado inicialmente não obteve a janela no prazo de 15 s; na execução normal do desktop os dois mesmos EXEs passaram. Nenhum binário/teste foi alterado para contornar o resultado. Logs de inicialização normais confirmam janela pronta e encerramento limpo.
+
+| Artefato gerado | Bytes | SHA256 |
+| --- | ---: | --- |
+| `dist/iMirror/iMirror.exe` | 27.395.808 | `45E5527BD615530D8051907736353FEFB0EA91EBF927BEF9368776F1B49E3233` |
+| `dist/iMirror-Portable.zip` | 151.821.701 | `B605AA7714712698C1CFB22BD59809E7437F2871B73CA05CC3C025955D39AA3A` |
+
+Evidência local ignorada pelo Git: `logs/ios-stable-debug.log`, `ios-stable-debug-final-build.log`, `ios-stable-release.log`, `ios-stable-package-smoke-user-desktop.log`. Fontes/documentação versionadas; caches, dist, ZIP e logs brutos ficam locais conforme .gitignore. Não foi declarada aprovação física de 10 minutos/reconexão deste release.

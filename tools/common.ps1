@@ -14,7 +14,12 @@ $env:DOTNET_CLI_HOME = Join-Path $ProjectRoot '.cache\dotnet-home'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = 'false'
+$env:MSBUILDDISABLENODEREUSE = '1'
+$env:DOTNET_CLI_USE_MSBUILD_SERVER = '0'
 $env:NUGET_PACKAGES = Join-Path $ProjectRoot '.cache\nuget'
+$env:TEMP = Join-Path $ProjectRoot '.cache\temp'
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
 
 function Invoke-ProjectDotNet {
     param([string[]]$Arguments)

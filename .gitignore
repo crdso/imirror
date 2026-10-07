@@ -5,6 +5,7 @@
 .tools/
 .cache/
 artifacts/
+dist/
 *.user
 *.suo
 *.log

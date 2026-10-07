@@ -4,6 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
+    <UseSharedCompilation>false</UseSharedCompilation>
     <RestoreConfigFile>$(MSBuildThisFileDirectory)NuGet.Config</RestoreConfigFile>
   </PropertyGroup>
 </Project>

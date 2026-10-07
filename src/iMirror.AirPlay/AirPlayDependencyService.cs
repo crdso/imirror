@@ -51,6 +51,14 @@ public sealed class AirPlayDependencyService(IDiagnosticLog log, ICommandProbe? 
                 ["GST_REGISTRY_1_0"] = Path.Combine(options.SessionDirectory, "gst-registry-x64.bin"),
                 ["GST_DEBUG"] = "2"
             };
+            var prefix = Directory.GetParent(gstDirectory)!.FullName;
+            if (File.Exists(Path.Combine(prefix, "runtime-manifest.json")))
+            {
+                // Portable runtime must not silently load plugins from an old MSYS2 installation.
+                environment["GST_PLUGIN_SYSTEM_PATH_1_0"] = Path.Combine(prefix, "lib", "gstreamer-1.0");
+                environment["GST_PLUGIN_PATH_1_0"] = "";
+                environment["GST_PLUGIN_SCANNER_1_0"] = Path.Combine(prefix, "libexec", "gstreamer-1.0", "gst-plugin-scanner.exe");
+            }
             var version = await _probe.RunAsync(executable, ["-v"], environment, cancellationToken).ConfigureAwait(false);
             log.Write(LogLevel.Information, "Dependency", version.Output.Trim());
             var uxVersion = Regex.Match(version.Output, @"UxPlay\s+(?:version\s+)?(\d+\.\d+(?:\.\d+)?)").Groups[1].Value;

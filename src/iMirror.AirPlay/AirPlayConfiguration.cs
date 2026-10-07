@@ -10,7 +10,7 @@ public static class AirPlayConfiguration
         var options = JsonSerializer.Deserialize<AirPlayOptions>(File.ReadAllText(file), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidDataException("Empty AirPlay configuration.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(file))!;
-        string? Resolve(string? path) => string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path, directory);
+        string? Resolve(string? path) => string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(Environment.ExpandEnvironmentVariables(path), directory);
         options = options with { UxPlayPath = Resolve(options.UxPlayPath), GStreamerBinPath = Resolve(options.GStreamerBinPath), BonjourDirectory = Resolve(options.BonjourDirectory), SessionDirectory = Resolve(options.SessionDirectory)!, AttemptLogPath = Resolve(options.AttemptLogPath) };
         options.Validate();
         return options;

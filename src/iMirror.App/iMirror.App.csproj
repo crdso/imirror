@@ -9,7 +9,7 @@
     <AssemblyName>iMirror</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
-    <Content Include="..\..\tools\send-ctrl-c.ps1" Link="send-ctrl-c.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\tools\send-ctrl-c.ps1" Link="send-ctrl-c.ps1" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <ProjectReference Include="..\iMirror.Core\iMirror.Core.csproj" />
     <ProjectReference Include="..\iMirror.AirPlay\iMirror.AirPlay.csproj" />
     <ProjectReference Include="..\iMirror.Bluetooth\iMirror.Bluetooth.csproj" />

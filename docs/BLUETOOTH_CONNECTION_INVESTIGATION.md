@@ -116,3 +116,22 @@ A captura também mostrou alternância com anúncio sem UUID HID. Como o upstrea
 O status permanece **PENDING LIVE IPHONE CONNECTION DIAGNOSIS**. A instrumentação passou a capturar a queda; a conexão física ainda não foi corrigida ou revalidada.
 
 Validação final após desfazer o experimento: Debug/Release, 59/59 grupos e 40/40 fixtures por configuração; 0 warnings/0 errors. Evidências: `logs/bluetooth-final-debug.log` e `logs/bluetooth-final-release.log`. As fontes e outputs finais conservam a publicação HID original; não ficou workaround de BAS, rádio ou segurança. UxPlay/configuração/perfil mantêm os hashes registrados anteriormente. O pacote bce88de continua preservado, e usa os scripts externos de diagnóstico atualizados.
+
+## Parada explícita da espera Bluetooth
+
+A coleta solicitada novamente começou às 15:46:08 e terminou às 15:49:08: 482 registros, 476 metadados decodificados, zero perdas/erros de schema/parse. Não registrou conexão ou tráfego de dados; o app permaneceu em geração 1, sem leituras HID/subscribers. O intervalo sozinho não comprova uma tentativa física do usuário.
+
+Em Controle foi acrescentado **Parar Bluetooth**. Cancela a inicialização pendente, aguarda e libera qualquer captura em andamento, e solicita cleanup/StopAdvertising. Enquanto aguarda, Conectar fica desabilitado para não renovar inadvertidamente o pareamento. Parar não encerra AirPlay, desliga o rádio, apaga bonds ou altera rede/firewall. Uma parada confirmada permite uma conexão explícita posterior. A operação é serializada e idempotente.
+
+O teste nativo separado das 15:53 criou um provider real e solicitou sua parada, sem enviar cliques/teclas ou alterar pareamento. O Windows ainda reportou AdvertisingStatus=Started após o prazo de confirmação. Portanto a UI usa **StopUnconfirmed**, bloqueia input e outra criação, retém o lease até o encerramento e informa **Feche e reabra o iMirror**. Não apresenta esse resultado como anúncio comprovadamente parado nem libera o lease em uma parada intermediária. Ao encerrar normalmente o app, o lease é liberado. O teste não valida a reconexão do iPhone.
+
+Testes cobrem o botão/binding WPF, parada durante startup, preservação de AirPlay, bloqueio de ativação durante a parada, cliques repetidos, reconexão somente após parada confirmada e retenção do lease quando a parada nativa não é confirmada. A conexão física segue **PENDING LIVE IPHONE CONNECTION DIAGNOSIS**.
+
+Validação final do código `036fb36`: Debug e Release **61/61 grupos** (11 UI, 10 AirPlay, 40 BLE/input), mais **40/40 fixtures** do coletor por configuração; **0 warnings/0 errors**. Evidências locais: `logs/bluetooth-stop-debug.log`, `logs/bluetooth-stop-release.log` e `logs/bluetooth-native-stop-waiting.log`. Logs/fixtures nativas de execução e estado temporário continuam ignorados no Git.
+
+O teste nativo foi repetido na versão final Release às 16:01, com o mesmo resultado de parada não confirmada e rádio preservado como ligado. Os pacotes foram reabertos no smoke test; os 142 hashes nativos de cada variante, UxPlay 1.73.7, GStreamer 1.28.7, HEVC, renderer e portas originais foram conferidos. Evidência local: `logs/bluetooth-stop-package-smoke.log`. Esses pacotes substituem o pacote bce88de descrito historicamente acima, preservando seu runtime AirPlay.
+
+| Pacote atualizado, código 036fb36 | Bytes | SHA-256 |
+|---|---:|---|
+| dist/iMirror/iMirror.exe | 27.366.624 | `9710D0BBF4BCC51074A77FCB7C0AD6F7C82A8D41A017703814A6127E2BE76E6C` |
+| dist/iMirror-Portable.zip | 151.812.554 | `E79C5F54ECBEC5297C031F60380A7CC50743C607B766800B580044BC321822AD` |

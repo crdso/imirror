@@ -21,8 +21,9 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
     private bool _keyboard;
     private int _intensity;
     private byte _buttons;
-    private (double X, double Y)? _previous;
-    private (VideoViewport Viewport, int Width, int Height) _lastGeometry;
+    private readonly object _pointerGate = new();
+    private Native.Rect _clip;
+    private bool _clipOwned;
     private readonly RelativeMotion _motion = new();
     private VideoCursor? _cursor;
     private int _inside;
@@ -53,7 +54,7 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
         if (size.Width <= 0 || size.Height <= 0) { throw new InputBlockedException("A resolução do stream ainda não foi recebida."); }
         _dimensions = dimensions; _ownedPid = ownedPid; _keyboard = keyboard; _intensity = Math.Clamp(intensity, 1, 5);
         _speed = Math.Clamp(speed,0.25,3); _layout = layout;
-        _keys.Reset(); _wheel.Reset(); _buttons = 0; _previous = null; _motion.Reset(); _buffer = new(); _localKeys.Clear(); _forwardedKeys.Clear(); _inside = 0;
+        _keys.Reset(); _wheel.Reset(); _buttons = 0; _motion.Reset(); _buffer = new(); _localKeys.Clear(); _forwardedKeys.Clear(); _inside = 0;
         // Keys already held before activation stay local, including their matching key-up.
         for (int key = 1; key <= 255; key++) { if (Native.GetAsyncKeyState(key) < 0) { _localKeys.Add(key); } }
         await bluetooth.ReleaseAsync();
@@ -76,13 +77,13 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
         thread.Start();
         try { await ready.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
         catch { await StopAsync("falha ao instalar captura"); throw; }
-        log.Write("capture", $"Active; own Gst video foreground + viewport only; relative mouse speed={_speed:F2}x; keyboard layout={KeyboardLayout.ForWindow(_layout,_window)}; bounded queue=128; pacing=16ms; ESC/Ctrl+Alt+Q release input; no keystroke logging");
+        log.Write("capture", $"Active; locked hidden cursor in owned video viewport; Raw Input relative motion (no stream/window scale); speed={_speed:F2}x; keyboard layout={KeyboardLayout.ForWindow(_layout,_window)}; bounded queue=128; pacing=16ms; ESC/Ctrl+Alt+Q immediately release cursor; no keystroke logging");
     }
 
     private async Task FinishAsync(Task exited, Task worker)
     {
         await Task.WhenAll(exited, worker);
-        _keys.Reset(); _wheel.Reset(); _motion.Reset(); _buttons = 0; _previous = null; _inside = 0; _forwardedKeys.Clear();
+        _keys.Reset(); _wheel.Reset(); _motion.Reset(); _buttons = 0; _inside = 0; _forwardedKeys.Clear();
         _stop?.Dispose(); _stop = null; _threadId = 0;
         log.Write("capture", $"Stopped; reason={_reason}; hooks removed; neutral release attempted");
         Stopped?.Invoke(_reason);
@@ -95,6 +96,7 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
     {
         if (Interlocked.Exchange(ref _active, 0) == 0) { return; }
         _reason = reason; _buffer.Clear(); _stop?.Cancel();
+        ReleasePointerLock(); // Do not wait for BLE releases to return the local mouse.
         try { _cursor?.SetHidden(false); } catch (Exception error) { log.Error("cursor-restore-error",error); }
         // Hooks immediately fail open. Keep their pump alive while the sender
         // awaits keyboard then mouse neutral; it posts WM_QUIT after completion.
@@ -119,7 +121,7 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
         {
             _threadId = Native.GetCurrentThreadId(); Native.PeekMessage(out _, 0, 0, 0, 0);
             if (!IsActive) { ready.TrySetCanceled(); return; }
-            _cursor = new VideoCursor(_window!,_dimensions!,error => { log.Error("cursor-error",error); RequestStop("erro do cursor"); });
+            _cursor = new VideoCursor(_window!,_dimensions!,error => { log.Error("cursor-error",error); RequestStop("erro do cursor"); }, RawMotion);
             mouse = Native.SetWindowsHookEx(14, onMouse, Native.GetModuleHandle(null), 0);
             keyboard = Native.SetWindowsHookEx(13, onKey, Native.GetModuleHandle(null), 0);
             if (mouse == 0 || keyboard == 0) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
@@ -127,20 +129,21 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
             if (foreground==0) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
             timer = Native.SetTimer(0, 0, 50, 0);
             if (timer == 0) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+            UpdatePointerLock();
             ready.TrySetResult();
             while (Native.GetMessage(out var message, 0, 0, 0) > 0)
             {
                 Native.TranslateMessage(ref message); Native.DispatchMessage(ref message);
                 if (!IsActive) { if (Volatile.Read(ref _sendingComplete) != 0) { break; } continue; }
                 if (!Allowed(false)) { RequestStop("foco, stream ou conexão HID perdido"); }
-                else if (!PointerInside()) { LeaveViewport(); }
-                else { Volatile.Write(ref _inside,1); _cursor.SetHidden(true); }
+                else { UpdatePointerLock(); }
             }
         }
         catch (Exception error) { log.Error("hook-error", error); ready.TrySetException(error); RequestStop("erro da captura"); }
         finally
         {
             RequestStop("fim da captura");
+            ReleasePointerLock();
             try { _cursor?.SetHidden(false); } catch (Exception error) { log.Error("cursor-restore-error",error); }
             if (mouse != 0) { Native.UnhookWindowsHookEx(mouse); }
             if (keyboard != 0) { Native.UnhookWindowsHookEx(keyboard); }
@@ -162,27 +165,10 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
             var mouse = Marshal.PtrToStructure<Native.Mouse>(data);
             if ((mouse.Flags & 1) != 0) { return Next(); }
             if (!Allowed(true)) { RequestStop("janela ou mouse HID indisponível"); return Next(); }
-            if (!PointOwned(mouse.Point)) { LeaveViewport(); return Next(); }
-            var dims = _dimensions!(); var position = _window!.Read(mouse.Point.X, mouse.Point.Y, dims.Width, dims.Height);
-            var geometry = (position.Viewport, dims.Width, dims.Height);
-            if (_lastGeometry != geometry) { _previous = null; _motion.Reset(); _lastGeometry = geometry; }
-            var stream = position.Viewport.ToStream(position.X, position.Y);
-            if (stream is null)
-            {
-                LeaveViewport();
-                return Next(); // letterbox, non-client and other windows never swallowed.
-            }
-            Volatile.Write(ref _inside,1); _cursor?.SetHidden(true);
+            UpdatePointerLock();
+            if (!PointerInside()) { RequestStop("área de vídeo indisponível"); return Next(); }
             int msg = (int)message;
-            if (msg == 0x200)
-            {
-                if (_previous is { } old)
-                {
-                    var (dx,dy) = _motion.Add(stream.Value.X - old.X,stream.Value.Y - old.Y,_speed);
-                    if (dx != 0 || dy != 0) { Queue(InputReport.Mouse(_buttons, dx, dy), true); }
-                }
-                _previous = stream; return Next();
-            }
+            if (msg == 0x200) { return Next(); } // Cursor warps/legacy screen movement never become phone movement.
             byte button = msg is 0x201 or 0x202 ? (byte)1 : msg is 0x204 or 0x205 ? (byte)2 : (byte)0;
             if (button != 0)
             {
@@ -244,6 +230,45 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
     private void Queue(InputReport report, bool motion = false)
     { if (!_buffer.Enqueue(report, motion)) { RequestStop("fila HID excedida; input liberado"); } }
 
+    private void RawMotion(int x, int y)
+    {
+        if (!Allowed(true) || Volatile.Read(ref _inside)==0) { return; }
+        var (dx,dy)=_motion.Add(x,y,_speed);
+        if (dx!=0 || dy!=0) { Queue(InputReport.Mouse(_buttons,dx,dy),true); }
+    }
+    private void UpdatePointerLock()
+    {
+        lock (_pointerGate)
+        {
+            if (!Allowed(false)) { return; }
+            if (_clipOwned && Native.GetClipCursor(out var existing) &&
+                (existing.Left!=_clip.Left || existing.Top!=_clip.Top || existing.Right!=_clip.Right || existing.Bottom!=_clip.Bottom))
+            { RequestStop("confinamento do mouse alterado"); return; }
+            var size=_dimensions!(); var position=_window!.Read(0,0,size.Width,size.Height); var viewport=position.Viewport;
+            if (viewport.Width<2 || viewport.Height<2) { throw new InputBlockedException("Área de vídeo indisponível para capturar o mouse."); }
+            var center=new Native.Point { X=(int)(viewport.Left+viewport.Width/2), Y=(int)(viewport.Top+viewport.Height/2) };
+            if (!Native.ClientToScreen(_window.Handle,ref center)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+            var rect=new Native.Rect { Left=center.X, Top=center.Y, Right=center.X+1, Bottom=center.Y+1 };
+            if (!_clipOwned || _clip.Left!=rect.Left || _clip.Top!=rect.Top)
+            {
+                if (!Native.ClipCursor(ref rect)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+                _clip=rect; _clipOwned=true;
+            }
+            Volatile.Write(ref _inside,1); _cursor?.SetHidden(true);
+        }
+    }
+    private void ReleasePointerLock()
+    {
+        lock (_pointerGate)
+        {
+            if (!_clipOwned) { return; }
+            _clipOwned=false; Volatile.Write(ref _inside,0);
+            // Never clear a different app's newer clip rectangle on focus loss.
+            if (!Native.GetClipCursor(out var rect) || (rect.Left==_clip.Left && rect.Top==_clip.Top && rect.Right==_clip.Right && rect.Bottom==_clip.Bottom))
+            { if (!Native.ReleaseCursor(0)) { log.Error("cursor-release",new Win32Exception(Marshal.GetLastWin32Error())); } }
+        }
+    }
+
     private bool PointerInside()
     {
         if (!Allowed(false) || !Native.GetCursorPos(out var pointer)) { return false; }
@@ -259,7 +284,7 @@ public sealed class InputCapture(IBluetoothController bluetooth, BluetoothContro
     {
         _cursor?.SetHidden(false);
         if (Interlocked.Exchange(ref _inside,0) == 0) { return; }
-        _buffer.ClearAndRelease(); _previous = null; _motion.Reset(); _wheel.Reset(); _buttons = 0;
+        _buffer.ClearAndRelease(); _motion.Reset(); _wheel.Reset(); _buttons = 0;
         // A held key remains local until its matching key-up, even after reentry.
         foreach (int key in _forwardedKeys) { _localKeys.Add(key); }
         _forwardedKeys.Clear(); _keys.Reset();

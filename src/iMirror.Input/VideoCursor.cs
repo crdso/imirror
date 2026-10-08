@@ -11,6 +11,8 @@ public sealed class VideoCursor : IDisposable
     private readonly VideoWindow _video;
     private readonly Func<(int Width,int Height)> _dimensions;
     private readonly Action<Exception>? _onError;
+    private readonly Action<int,int>? _onMotion;
+    private bool _rawRegistered;
     private readonly CursorNative.WindowProc _procedure;
     private readonly uint _thread;
     private readonly string _className = "iMirror.Cursor." + Guid.NewGuid().ToString("N");
@@ -22,9 +24,9 @@ public sealed class VideoCursor : IDisposable
     public nint Handle => _handle;
     public bool IsVisible => _handle!=0 && Native.IsWindowVisible(_handle);
     public bool PointerOnSurface { get; private set; }
-    public VideoCursor(VideoWindow video, Func<(int Width,int Height)> dimensions, Action<Exception>? onError = null)
+    public VideoCursor(VideoWindow video, Func<(int Width,int Height)> dimensions, Action<Exception>? onError = null, Action<int,int>? onMotion = null)
     {
-        _video = video; _dimensions = dimensions; _onError=onError; _thread = Native.GetCurrentThreadId();
+        _video = video; _dimensions = dimensions; _onError=onError; _onMotion=onMotion; _thread = Native.GetCurrentThreadId();
         _instance = Native.GetModuleHandle(null); _procedure = Procedure;
         var definition = new CursorNative.WindowClass { Size=(uint)Marshal.SizeOf<CursorNative.WindowClass>(),
             Procedure=_procedure,Instance=_instance,ClassName=_className,
@@ -35,6 +37,8 @@ public sealed class VideoCursor : IDisposable
         _handle = CursorNative.CreateWindowEx(0x08080088,_className,"",0x80000000,0,0,1,1,0,0,_instance,0);
         if (_handle==0) { CursorNative.UnregisterClass(_className,_instance); throw new Win32Exception(Marshal.GetLastWin32Error()); }
         if (!CursorNative.SetLayeredWindowAttributes(_handle,0,1,2)) { int error=Marshal.GetLastWin32Error(); Dispose(); throw new Win32Exception(error); }
+        if (_onMotion is not null)
+        { try { RawMouseMotion.Register(_handle); _rawRegistered=true; } catch { Dispose(); throw; } }
     }
     public bool Owns(nint root) => root != 0 && root == _handle;
     public void SetHidden(bool hidden)
@@ -86,6 +90,10 @@ public sealed class VideoCursor : IDisposable
         // Never let a managed exception cross the native window-procedure ABI.
         try
         {
+            if (message==0xFF && _onMotion is not null) // WM_INPUT; DefWindowProc still performs native cleanup.
+            {
+                if (RawMouseMotion.Read(lparam) is { } movement && (movement.X!=0 || movement.Y!=0)) { _onMotion(movement.X,movement.Y); }
+            }
             if (message==0x8001) { Apply(); return 0; }
             if (message==0x0F)
             {
@@ -108,6 +116,12 @@ public sealed class VideoCursor : IDisposable
     public void Dispose()
     {
         SetHidden(false);
+        if (_rawRegistered)
+        {
+            try { RawMouseMotion.Register(0,remove:true); }
+            catch (Exception error) { try { _onError?.Invoke(error); } catch { /* Cleanup must continue. */ } }
+            finally { _rawRegistered=false; }
+        }
         if (_handle!=0) { CursorNative.DestroyWindow(_handle); _handle=0; }
         CursorNative.UnregisterClass(_className,_instance);
         GC.KeepAlive(_procedure);

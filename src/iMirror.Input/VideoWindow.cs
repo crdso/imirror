@@ -62,6 +62,9 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] internal static extern bool SetForegroundWindow(nint window);
     [DllImport("user32.dll")] internal static extern bool GetCursorPos(out Point point);
+    [DllImport("user32.dll", SetLastError=true)] internal static extern bool ClipCursor(ref Rect rect);
+    [DllImport("user32.dll", EntryPoint="ClipCursor", SetLastError=true)] internal static extern bool ReleaseCursor(nint rect);
+    [DllImport("user32.dll", SetLastError=true)] internal static extern bool GetClipCursor(out Rect rect);
     [DllImport("user32.dll")] internal static extern nint SetWinEventHook(uint min,uint max,nint module,EventCallback callback,uint process,uint thread,uint flags);
     [DllImport("user32.dll")] internal static extern bool UnhookWinEvent(nint hook);
     [DllImport("user32.dll")] internal static extern nint SetThreadDpiAwarenessContext(nint context);

@@ -49,7 +49,7 @@ O Bonjour é um serviço instalado separadamente; a DLL do pacote não substitui
 4. Com vídeo ativo e subscribers live de **mouse e teclado**, clique **Ativar controle** e use a janela de vídeo em foco.
 5. **Esc / Ctrl+Alt+Q** interrompe a captura e libera o cursor. **F11** alterna fullscreen da interface; Esc sai. A janela externa continua independente.
 
-**Mouse:** velocidade linear de 0,25x–3x, padrão 1x; scroll usa intensidade de 1–5. O controle é relativo, preserva aspect ratio/letterboxing e DPI. Cursor local oculto só dentro do vídeo; saída, perda de foco, desconexão e fechamento enviam releases e devolvem o input ao Windows.
+**Mouse:** ao ativar, o cursor local fica oculto e confinado a um ponto interno do vídeo; use apenas o ponteiro do iPhone. Raw Input envia deltas físicos relativos sem multiplicar pela resolução/DPI/escala da janela. Velocidade 0,25x–3x, padrão 1x; scroll 1–5. Aspect ratio/letterboxing definem a área segura, inclusive após resize/rotação. Esc/Ctrl+Alt+Q, perda de foco, desconexão ou fechamento liberam imediatamente o cursor e enviam releases. A posição do cursor do Windows não representa a posição do ponteiro do iPhone.
 
 **Teclado / ABNT2:** escolha Auto, Português Brasil ABNT2 ou US. Configure o mesmo layout em Ajustes → Geral → Teclado → Teclado Físico no iPhone. Usa teclas físicas e composição por teclas mortas. O perfil padrão **iOS Stable / Known Good** aceita usages até 0x65: International1 do ABNT2 (`/` e `?`, usage 0x87) fica explicitamente indisponível; o layout US mantém esses caracteres. O mapper não estende o descriptor. Reative o controle após mudar layout ou velocidade. Para usar também o teclado do iPhone, ative Mostrar Teclado na Tela no AssistiveTouch.
 

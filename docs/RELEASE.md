@@ -10,7 +10,7 @@ Requisitos: Windows x64 10/11 build 19041+, adaptador Bluetooth com BLE peripher
 
 1. Em **Espelhamento**, clique **Iniciar AirPlay**. No iPhone: Central de Controle → Espelhamento de Tela → **iMirror - Windows**.
 2. Em **Controle**, clique **Conectar Bluetooth**; no iPhone: Ajustes → Acessibilidade → Toque → AssistiveTouch → Dispositivos → Dispositivos Bluetooth. Selecione o PC uma vez e aguarde mouse e teclado live.
-3. Ative o controle e use a janela externa de vídeo em foco. **Esc / Ctrl+Alt+Q** libera o cursor; **F11** alterna fullscreen da interface.
+3. Ative o controle: o cursor do PC fica oculto e confinado ao vídeo. Use a bolinha do iPhone; não há cursor local para alinhar. **Esc / Ctrl+Alt+Q** libera imediatamente o mouse para usar o PC. Velocidade padrão 1x ajustável; **F11** alterna fullscreen da interface.
 4. Em **Teclado**, escolha Auto, Português Brasil ABNT2 ou US e use o mesmo layout em Teclado Físico no iPhone. Após ajustes de velocidade/layout, reative o controle.
 5. **Diagnóstico** abre os logs; Limpar afeta apenas a lista. Logs em `%LOCALAPPDATA%/iMirror/logs`, limitados a 5 MiB × 5 arquivos por família.
 

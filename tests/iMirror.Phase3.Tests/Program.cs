@@ -27,6 +27,7 @@ internal static class Program
                 var copy = HidSchema.ReportMap; copy[0] = 0; Require(HidSchema.ReportMap[0] == 5);
                 Require(HidSchema.KeyboardState(0,[0x87])[2] == 0);
             }));
+            await Test("Raw mouse x86/x64 signed movement; absolute, truncated and non-mouse packets rejected", () => Check(RawMouseProbe.Check));
             await Test("Keyboard reserved byte and six usages without report ID", () => Check(() => Require(HidSchema.KeyboardState(2, [4,5]).SequenceEqual(new byte[] {2,0,4,5,0,0,0,0}))));
             await Test("Keyboard rollover and deduplication", () => Check(() => { Require(HidSchema.KeyboardState(0, [4,4]).Count(value => value == 4) == 1); Require(HidSchema.KeyboardState(0, [4,5,6,7,8,9,10]).Skip(2).All(value => value == 1)); }));
             await Test("Mouse 16-bit relative axes and signed wheel", () => Check(() => { var data = HidSchema.Mouse(-30000,30000,-5,2); Require(data.Length == 6 && data[0] == 2 && BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(1)) == -30000 && BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(3)) == 30000 && (sbyte)data[5] == -5); }));
@@ -185,6 +186,7 @@ internal static class Program
         public Action? AfterSend;
         public int MouseSent,KeyboardSent; public string? FirstAction;
         public Task? HoldSend; public int Delivered;
+        public Task? HoldRelease;
         public BluetoothStatus Status => new(Live ? BluetoothState.HidConnected : BluetoothState.Disconnected,"test",[],"fake",Live,Live);
         public event Action<BluetoothStatus>? StatusChanged;
         public Task ConnectAsync(CancellationToken token=default) { StatusChanged?.Invoke(Status); return Task.CompletedTask; }
@@ -194,7 +196,7 @@ internal static class Program
         private async Task Send() { var now=DateTimeOffset.UtcNow; if(Sent!=0) { MinGap=Math.Min(MinGap,(now-_last).TotalMilliseconds); } _last=now; Sent++; AfterSend?.Invoke(); if(Fail) { throw new IOException("simulated notify failure"); } if(HoldSend is not null) { await HoldSend; } Delivered++; }
         public Task SendMouseAsync(byte buttons,int dx,int dy,int wheel,CancellationToken token) { FirstAction ??= "mouse"; MouseSent++; return Send(); }
         public Task SendKeyboardAsync(byte modifiers,byte[] usages,CancellationToken token) { FirstAction ??= "keyboard"; KeyboardSent++; return Send(); }
-        public Task ReleaseAsync() { FirstAction ??= "release"; Release++; return Task.CompletedTask; }
+        public async Task ReleaseAsync() { FirstAction ??= "release"; Release++; if (HoldRelease is not null) { await HoldRelease; } }
     }
     private static async Task<int> NativeTest()
     {
@@ -298,6 +300,7 @@ internal static class Program
             log.Write("native-test", $"Synthetic Gst exited={process.HasExited}; windows={VideoWindowInspection.Read(process.Id)}; matchingVideo={VideoWindow.Find(process.Id) is not null}");
             Require(VideoWindow.Find(process.Id) is not null && VideoWindow.Find(0) is null && VideoWindow.Find(Environment.ProcessId) is null);
             var video=VideoWindow.Find(process.Id)!;
+            using var testForeground=NativeCursorProbe.ActivateOwnedTestWindow(video,log);
             using(var surface=new VideoCursor(video,()=>(320,640)))
             {
                 Require(surface.Handle!=0 && surface.Owns(surface.Handle) && !surface.Owns(video.Handle));
@@ -313,7 +316,7 @@ internal static class Program
                 return;
             }
             Require(capture.IsActive);
-            await NativeCursorProbe.RunAsync(video,capture,log);
+            await NativeCursorProbe.RunAsync(video,capture,log,()=>fake.MouseSent,task=>fake.HoldRelease=task);
             int sentAtStop=fake.Sent; await Task.Delay(40); Require(!capture.IsActive && fake.Sent==sentAtStop);
             fake.Live=true;
             await capture.StartAsync(()=>process.Id,()=>(640,320),false,2);

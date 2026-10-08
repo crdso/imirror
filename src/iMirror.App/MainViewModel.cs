@@ -184,7 +184,7 @@ public sealed partial class MainViewModel : INotifyPropertyChanged, IDisposable
     public bool ControlActive => _capture?.IsActive == true;
     public bool CanControl => !_bluetoothStopping && (ControlActive || Bluetooth.ControlReady && AirPlay.State == AirPlayState.Streaming && AirPlay.Width > 0 && AirPlay.Height > 0);
     public string ControlButtonText => ControlActive ? "Desativar controle" : "Ativar controle";
-    public string ControlStatus => ControlActive ? "Controle ativo — ESC ou Ctrl+Alt+Q para parar" : "Mouse relativo — captura somente na janela de vídeo em foco";
+    public string ControlStatus => ControlActive ? "Mouse capturado — use a bolinha do iPhone. ESC ou Ctrl+Alt+Q devolve o mouse ao Windows." : "Mouse relativo — ao ativar, o cursor do PC fica oculto e preso na área do vídeo.";
     public bool CaptureKeyboard
     { get => _captureKeyboard; set { if (_captureKeyboard == value) { return; } _captureKeyboard = value; _capture?.RequestStop("opção de teclado alterada"); OnPropertyChanged(); } }
     public int WheelIntensity

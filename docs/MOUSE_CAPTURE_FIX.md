@@ -17,3 +17,20 @@ Abra a versão nova, conecte Bluetooth e AirPlay usando o vínculo existente; n�
 ## Regressão
 
 Fixtures decodificam RAWMOUSE x86/x64, movimento assinado e flags relativas; rejeitam absoluto, pacote truncado e dispositivos de outro tipo. O teste nativo usa janela GStreamer real com HID fake: valida cursor oculto/confinado, registro Raw Input, tentativa de escapar sem movimento HID, liberação antes de terminar um release BLE deliberadamente bloqueado, cursor livre e remoção do registro no Stop. Testes de foco negativo preservam fail-open. A ativação assistida de foreground existe apenas no harness de teste; a aplicação mantém a autorização pelo clique do usuário.
+
+## Evidência final
+
+Código dos pacotes: `2be73ad`. Validação local em 2026-10-08:
+
+- Debug e Release: 0 erros, 0 warnings; 67/67 grupos em cada configuração (UI 12, AirPlay 10, BLE/input 45).
+- 40 fixtures HCI/BIP, 3 grupos de integridade iOS Stable e 4 de contexto de desconexão aprovados em ambas as configurações; somente dados sintéticos/offline.
+- Release: probe BLE 11/11 e segurança de rede 6/6; fixtures, sem rádio ou alteração de rede.
+- Teste nativo de captura aprovado em Debug e Release: janela GStreamer real, hooks/Raw Input/cursor reais e HID fake; nenhum input enviado ao iPhone.
+- EXE direto e ZIP portátil aprovados no smoke: abertura/fechamento, ícones, janela dentro da WorkArea, 142 arquivos nativos com SHA256 preservados, versões e configuração AirPlay iguais.
+
+| Artefato | Bytes | SHA256 |
+| --- | ---: | --- |
+| `dist/iMirror/iMirror.exe` | 27398368 | `D797FEBE88D0BCF38BE0DED9AE32A28C9125DDA237B5E09045108DC2B86AE768` |
+| `dist/iMirror-Portable.zip` | 151823198 | `9C864793AA8D9A972E621DBE7663DE39A9E8B72722C53AD75ADEDFFD1D1C813A` |
+
+Evidência local ignorada pelo Git: `logs/mouse-capture-debug.log`, `logs/mouse-capture-native-debug.log`, `logs/mouse-capture-release.log` e `logs/mouse-capture-package-smoke.log`. O usuário confirmou o funcionamento Bluetooth anterior; o movimento físico com esta nova captura ainda precisa ser testado no iPhone.
